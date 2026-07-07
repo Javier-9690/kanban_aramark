@@ -16,7 +16,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-
   document.querySelectorAll('.task-actions button, .task-actions a, input, select, textarea').forEach(el => {
     el.addEventListener('mousedown', event => event.stopPropagation());
     el.addEventListener('dragstart', event => event.preventDefault());
@@ -24,9 +23,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let dragged = null;
   document.querySelectorAll('.task-card').forEach(card => {
-    card.addEventListener('dragstart', () => {
-      dragged = card;
-      card.classList.add('dragging');
+    card.addEventListener('dragstart', (event) => {
+      dragged = event.currentTarget;
+      dragged.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', dragged.dataset.taskId || '');
     });
     card.addEventListener('dragend', () => {
       card.classList.remove('dragging');
@@ -37,26 +38,43 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.drop-zone').forEach(zone => {
     zone.addEventListener('dragover', event => {
       event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
       zone.classList.add('drag-over');
     });
     zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
     zone.addEventListener('drop', async event => {
       event.preventDefault();
       zone.classList.remove('drag-over');
-      if (!dragged) return;
-      zone.appendChild(dragged);
-      const taskId = dragged.dataset.taskId;
+
+      const card = dragged || document.querySelector('.task-card.dragging');
+      const taskId = event.dataTransfer.getData('text/plain') || card?.dataset.taskId;
       const status = zone.dataset.status;
+
+      if (!taskId || !status) {
+        alert('No se pudo identificar la tarea o el estado. Recarga el tablero e inténtalo nuevamente.');
+        window.location.reload();
+        return;
+      }
+
+      const previousParent = card?.parentElement || null;
+      const moveUrl = window.KANBAN_MOVE_URL || '/api/mover';
+
       try {
-        const response = await fetch(`/mover/${taskId}`, {
+        if (card) card.classList.add('saving');
+        const response = await fetch(moveUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status })
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ task_id: taskId, status })
         });
-        if (!response.ok) throw new Error('No se pudo mover la tarea');
+        let result = {};
+        try { result = await response.json(); } catch (_) {}
+        if (!response.ok || result.ok === false) {
+          throw new Error(result.error || `No se pudo mover la tarea. Código ${response.status}.`);
+        }
         window.location.reload();
       } catch (error) {
-        alert(error.message);
+        if (card && previousParent) previousParent.appendChild(card);
+        alert(error.message || 'No se pudo mover la tarea.');
         window.location.reload();
       }
     });

@@ -387,26 +387,55 @@ def eliminar(task_id):
     return redirect(url_for("index"))
 
 
-@app.route("/mover/<int:task_id>", methods=["POST"])
-def mover(task_id):
-    payload = request.get_json(silent=True) or request.form
-    status = normalize_status(payload.get("status"))
+def move_task_to_status(task_id, status):
+    """Mueve una tarea de forma segura y devuelve respuesta JSON consistente."""
+    try:
+        task_id = int(task_id)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "ID de tarea inválido."}), 400
+
+    if status not in STATUS_KEYS:
+        return jsonify({"ok": False, "error": "Estado inválido."}), 400
+
     old_task = get_task(task_id)
+    if old_task is None:
+        return jsonify({"ok": False, "error": "La tarea no existe o ya fue eliminada. Recarga el tablero."}), 404
+
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE tasks SET status = ?, position = ?, updated_at = ? WHERE id = ?",
             (status, next_position(status), now_text(), task_id),
         )
         conn.commit()
+        if cur.rowcount == 0:
+            return jsonify({"ok": False, "error": "No se encontró la tarea al actualizar."}), 404
+
     task = get_task(task_id)
-    if old_task and old_task.get("status") != status:
+    if task and old_task.get("status") != status:
         send_task_email(
             task,
             f"Cambio de estado: {task['title']}",
             "Una tarea asignada a tu nombre cambió de estado en el Kanban Operacional Aramark.",
             [f"Estado: {STATUS_LABELS.get(old_task.get('status'), old_task.get('status'))} → {STATUS_LABELS.get(status, status)}"],
         )
-    return jsonify({"ok": True, "status": status, "status_label": STATUS_LABELS[status]})
+    return jsonify({"ok": True, "task_id": task_id, "status": status, "status_label": STATUS_LABELS[status]})
+
+
+@app.route("/api/mover", methods=["POST"])
+def mover_api():
+    payload = request.get_json(silent=True) or request.form
+    return move_task_to_status(payload.get("task_id"), payload.get("status"))
+
+
+@app.route("/mover/<int:task_id>", methods=["GET", "POST"])
+def mover(task_id):
+    # Compatibilidad con versiones antiguas del JavaScript. Si el navegador llega por GET,
+    # se evita una pantalla Not Found y se vuelve al tablero.
+    if request.method == "GET":
+        flash("Movimiento no aplicado: usa arrastrar y soltar desde el tablero.", "error")
+        return redirect(url_for("index"))
+    payload = request.get_json(silent=True) or request.form
+    return move_task_to_status(task_id, payload.get("status"))
 
 
 @app.route("/exportar/csv")

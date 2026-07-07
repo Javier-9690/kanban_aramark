@@ -49,3 +49,8 @@ Si estas variables no están configuradas, la aplicación sigue funcionando norm
 ## Edición de tareas
 
 El botón **Editar** abre una página dedicada para evitar problemas de modales dentro de tarjetas arrastrables. Desde ahí se modifican responsable, correo, prioridad, estado, área y fecha límite.
+
+
+## Movimiento de tareas
+
+El arrastre de tarjetas usa el endpoint `/api/mover` con JSON `{task_id, status}`. También se mantiene `/mover/<id>` por compatibilidad. Esta versión evita errores intermitentes tipo Not Found al mover tarjetas porque valida el ID de tarea y el estado antes de actualizar.

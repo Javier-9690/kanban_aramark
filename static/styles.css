@@ -137,3 +137,5 @@ dd { margin: 0; font-size: 12.5px; color: #333; line-height: 1.25; overflow-wrap
   margin-top: 6px;
 }
 .task-actions button, .task-actions a { cursor: pointer; }
+
+.task-card.saving { opacity: 0.65; pointer-events: none; }
