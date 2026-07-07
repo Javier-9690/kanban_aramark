@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div>
+    <h1>KANBAN OPERACIONAL ARAMARK</h1>
+    <p>Gestión visual de tareas, responsables, prioridades y estados operativos.</p>
+  </div>
+  <div class="hero-actions">
+    <button type="button" class="btn" data-open-modal="createModal">+ Nueva tarea</button>
+    <a class="btn secondary" href="{{ url_for('exportar_csv') }}">Exportar CSV</a>
+  </div>
+</section>
+
+<section class="metrics-grid">
+  <article class="metric-card"><span>Total tareas</span><strong>{{ metrics.total }}</strong></article>
+  <article class="metric-card"><span>Finalizadas</span><strong>{{ metrics.finalizados }}</strong></article>
+  <article class="metric-card"><span>Bloqueadas</span><strong>{{ metrics.bloqueados }}</strong></article>
+  <article class="metric-card"><span>Vencidas</span><strong>{{ metrics.vencidos }}</strong></article>
+  <article class="metric-card"><span>Avance</span><strong>{{ '%.1f'|format(metrics.avance) }}%</strong></article>
+</section>
+
+<section class="filter-card">
+  <form method="get" action="{{ url_for('index') }}">
+    <input type="search" name="q" placeholder="Buscar tarea, descripción, responsable o área" value="{{ filters.q }}">
+    <select name="area">
+      <option value="">Todas las áreas</option>
+      {% for area in AREAS %}<option value="{{ area }}" {% if filters.area == area %}selected{% endif %}>{{ area }}</option>{% endfor %}
+    </select>
+    <select name="priority">
+      <option value="">Todas las prioridades</option>
+      {% for pr in PRIORITIES %}<option value="{{ pr }}" {% if filters.priority == pr %}selected{% endif %}>{{ pr }}</option>{% endfor %}
+    </select>
+    <input type="search" name="assignee" placeholder="Responsable" value="{{ filters.assignee }}">
+    <button type="submit">Filtrar</button>
+    <a class="btn secondary" href="{{ url_for('index') }}">Limpiar</a>
+  </form>
+</section>
+
+<section class="kanban-board" aria-label="Tablero Kanban">
+  {% for status_key, status_label in STATUSES %}
+  <section class="kanban-column" data-status="{{ status_key }}">
+    <header class="column-header">
+      <h2>{{ status_label }}</h2>
+      <span>{{ board[status_key]|length }}</span>
+    </header>
+    <div class="drop-zone" data-status="{{ status_key }}">
+      {% for task in board[status_key] %}
+      <article class="task-card priority-{{ task.priority|lower }} {% if task.is_overdue %}overdue{% endif %}" draggable="true" data-task-id="{{ task.id }}">
+        <div class="task-topline">
+          <span class="priority">{{ task.priority }}</span>
+          {% if task.is_overdue %}<span class="overdue-pill">Vencida</span>{% endif %}
+        </div>
+        <h3>{{ task.title }}</h3>
+        {% if task.description %}<p>{{ task.description }}</p>{% endif %}
+        <dl>
+          {% if task.assignee %}<div><dt>Responsable</dt><dd>{{ task.assignee }}</dd></div>{% endif %}
+          {% if task.area %}<div><dt>Área</dt><dd>{{ task.area }}</dd></div>{% endif %}
+          {% if task.due_date %}<div><dt>Fecha límite</dt><dd>{{ task.due_date }}</dd></div>{% endif %}
+        </dl>
+        <div class="task-actions">
+          <button type="button" class="ghost" data-open-modal="editModal_{{ task.id }}">Editar</button>
+          <form method="post" action="{{ url_for('eliminar', task_id=task.id) }}" onsubmit="return confirm('¿Eliminar esta tarea?');">
+            <button type="submit" class="ghost danger-text">Eliminar</button>
+          </form>
+        </div>
+      </article>
+
+      <div class="modal" id="editModal_{{ task.id }}" aria-hidden="true">
+        <div class="modal-panel">
+          <button type="button" class="modal-close" data-close-modal>&times;</button>
+          <h2>Editar tarea</h2>
+          <form method="post" action="{{ url_for('editar', task_id=task.id) }}" class="task-form">
+            {% include "task_form_fields.html" %}
+            <button type="submit">Guardar cambios</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+</section>
+
+<div class="modal" id="createModal" aria-hidden="true">
+  <div class="modal-panel">
+    <button type="button" class="modal-close" data-close-modal>&times;</button>
+    <h2>Nueva tarea</h2>
+    {% set task = {'title':'','description':'','status':'pendiente','priority':'Media','assignee':'','area':'','due_date':''} %}
+    <form method="post" action="{{ url_for('crear') }}" class="task-form">
+      {% include "task_form_fields.html" %}
+      <button type="submit">Crear tarea</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

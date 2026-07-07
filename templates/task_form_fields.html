@@ -1,0 +1,32 @@
+<label>Título
+  <input type="text" name="title" value="{{ task.title }}" required maxlength="120">
+</label>
+<label>Descripción
+  <textarea name="description" rows="4">{{ task.description }}</textarea>
+</label>
+<div class="form-grid">
+  <label>Estado
+    <select name="status">
+      {% for key, label in STATUSES %}<option value="{{ key }}" {% if task.status == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Prioridad
+    <select name="priority">
+      {% for pr in PRIORITIES %}<option value="{{ pr }}" {% if task.priority == pr %}selected{% endif %}>{{ pr }}</option>{% endfor %}
+    </select>
+  </label>
+</div>
+<div class="form-grid">
+  <label>Responsable
+    <input type="text" name="assignee" value="{{ task.assignee }}" maxlength="80">
+  </label>
+  <label>Área
+    <select name="area">
+      <option value="">Sin área</option>
+      {% for area in AREAS %}<option value="{{ area }}" {% if task.area == area %}selected{% endif %}>{{ area }}</option>{% endfor %}
+    </select>
+  </label>
+</div>
+<label>Fecha límite
+  <input type="date" name="due_date" value="{{ task.due_date }}">
+</label>
