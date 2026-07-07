@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 import csv
+import html as html_lib
 import io
+import json
 import os
 import smtplib
 import socket
 import sqlite3
 import threading
+import urllib.error
+import urllib.request
 from datetime import datetime, date
 from email.message import EmailMessage
 
@@ -72,14 +76,8 @@ def init_db():
 
 
 
-def email_enabled():
-    """Devuelve True si la app tiene configuración SMTP suficiente para enviar correos."""
-    required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"]
-    return all((os.environ.get(key) or "").strip() for key in required)
-
-
-def app_base_url():
-    return (os.environ.get("APP_BASE_URL") or "").strip().rstrip("/")
+def env_text(name, default=""):
+    return (os.environ.get(name) or default or "").strip()
 
 
 def env_bool(name, default=False):
@@ -89,14 +87,65 @@ def env_bool(name, default=False):
     return value in {"1", "true", "yes", "si", "sí", "on"}
 
 
-def create_ipv4_connection(host, port, timeout):
-    """Abre una conexión TCP forzando IPv4.
+def notifications_active():
+    """Permite apagar notificaciones sin borrar credenciales."""
+    return env_bool("NOTIFY_EMAIL", default=True)
 
-    En algunos entornos cloud, smtp.gmail.com puede resolver primero a IPv6.
-    Si el contenedor no tiene ruta IPv6, Python puede terminar con
-    [Errno 101] Network is unreachable. Esta función evita ese caso usando
-    solo registros A/IPv4.
-    """
+
+def app_base_url():
+    return env_text("APP_BASE_URL").rstrip("/")
+
+
+def brevo_sender_email():
+    return env_text("BREVO_FROM_EMAIL") or env_text("SMTP_FROM") or env_text("EMAIL_FROM")
+
+
+def brevo_enabled():
+    return bool(env_text("BREVO_API_KEY") and brevo_sender_email())
+
+
+def smtp_enabled():
+    required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"]
+    return all(env_text(key) for key in required)
+
+
+def selected_email_provider():
+    """Proveedor activo. Brevo se prioriza porque usa HTTPS y evita problemas SMTP en Render."""
+    if not notifications_active():
+        return "disabled"
+    preferred = env_text("EMAIL_PROVIDER", "auto").lower()
+    if preferred == "brevo":
+        return "brevo" if brevo_enabled() else "missing_brevo"
+    if preferred == "smtp":
+        return "smtp" if smtp_enabled() else "missing_smtp"
+    if brevo_enabled():
+        return "brevo"
+    if smtp_enabled():
+        return "smtp"
+    return "missing"
+
+
+def email_enabled():
+    return selected_email_provider() in {"brevo", "smtp"}
+
+
+def email_config_label():
+    provider = selected_email_provider()
+    if provider == "brevo":
+        return "Activo por Brevo API HTTPS"
+    if provider == "smtp":
+        return "Activo por SMTP"
+    if provider == "disabled":
+        return "Desactivado por NOTIFY_EMAIL=false"
+    if provider == "missing_brevo":
+        return "Brevo seleccionado, pero faltan BREVO_API_KEY o BREVO_FROM_EMAIL"
+    if provider == "missing_smtp":
+        return "SMTP seleccionado, pero faltan variables SMTP"
+    return "No configurado"
+
+
+def create_ipv4_connection(host, port, timeout):
+    """Abre una conexión TCP forzando IPv4 para compatibilidad SMTP."""
     last_exc = None
     addresses = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
     if not addresses:
@@ -127,22 +176,9 @@ class SMTPSSLIPv4(smtplib.SMTP_SSL):
         return self.context.wrap_socket(raw_socket, server_hostname=self._host)
 
 
-def _send_task_email_sync(task, subject, intro, changes=None):
-    """Envía una notificación por correo al responsable de la tarea.
-
-    En Render debes configurar SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
-    SMTP_FROM y opcionalmente APP_BASE_URL. Si no están configuradas, la app
-    sigue funcionando y solo registra el evento en logs.
-    """
-    recipient = (task.get("assignee_email") or "").strip()
-    if not recipient:
-        return False, "La tarea no tiene correo de responsable."
-    if not email_enabled():
-        app.logger.warning("Correo no enviado: SMTP no configurado. Destinatario: %s", recipient)
-        return False, "SMTP no configurado."
-
+def compose_task_email(task, intro, changes=None):
     base_url = app_base_url()
-    task_url = f"{base_url}/editar/{task['id']}" if base_url else ""
+    task_url = f"{base_url}/editar/{task['id']}" if base_url and task.get("id") else ""
     lines = [
         intro,
         "",
@@ -159,18 +195,94 @@ def _send_task_email_sync(task, subject, intro, changes=None):
     if task_url:
         lines.extend(["", f"Abrir tarea: {task_url}"])
     lines.extend(["", "Kanban Operacional Aramark - Campamento 5400"])
+    text_content = "\n".join(lines)
 
+    esc = lambda value: html_lib.escape(str(value or ""))
+    change_html = ""
+    if changes:
+        change_html = "<h3>Cambios registrados</h3><ul>" + "".join(f"<li>{esc(item)}</li>" for item in changes) + "</ul>"
+    button_html = f'<p><a href="{esc(task_url)}" style="display:inline-block;background:#ed1b2e;color:#ffffff;padding:10px 14px;border-radius:5px;text-decoration:none;font-weight:bold;">Abrir tarea</a></p>' if task_url else ""
+    html_content = f"""
+    <html>
+      <body style="font-family:Arial,Helvetica,sans-serif;color:#303030;line-height:1.45;">
+        <div style="border-top:6px solid #ed1b2e;background:#ffffff;padding:18px;border:1px solid #eee;max-width:680px;">
+          <h2 style="margin-top:0;color:#202020;">Kanban Operacional Aramark</h2>
+          <p>{esc(intro)}</p>
+          <table style="border-collapse:collapse;width:100%;font-size:14px;">
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Tarea</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('title'))}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Estado</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(STATUS_LABELS.get(task.get('status'), task.get('status') or ''))}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Prioridad</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('priority'))}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Responsable</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('assignee'))}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Área</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('area'))}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Fecha límite</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('due_date') or 'Sin fecha')}</td></tr>
+          </table>
+          {change_html}
+          {button_html}
+          <p style="font-size:12px;color:#777;margin-top:18px;">Campamento 5400 · Notificación automática.</p>
+        </div>
+      </body>
+    </html>
+    """
+    return text_content, html_content
+
+
+def send_brevo_email_sync(recipient, recipient_name, subject, text_content, html_content):
+    api_key = env_text("BREVO_API_KEY")
+    sender_email = brevo_sender_email()
+    sender_name = env_text("BREVO_FROM_NAME", "Kanban Operacional Aramark")
+    timeout = float(env_text("BREVO_TIMEOUT", "8"))
+    if not api_key or not sender_email:
+        return False, "Brevo no configurado. Falta BREVO_API_KEY o BREVO_FROM_EMAIL."
+
+    payload = {
+        "sender": {"name": sender_name, "email": sender_email},
+        "to": [{"email": recipient, "name": recipient_name or recipient}],
+        "subject": subject,
+        "htmlContent": html_content,
+        "textContent": text_content,
+    }
+    reply_to = env_text("BREVO_REPLY_TO")
+    if reply_to:
+        payload["replyTo"] = {"email": reply_to}
+
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "accept": "application/json",
+            "api-key": api_key,
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            body = response.read().decode("utf-8", "ignore")
+            if not (200 <= response.status < 300):
+                raise RuntimeError(f"Brevo respondió HTTP {response.status}: {body}")
+            app.logger.info("Correo enviado por Brevo a %s. Respuesta: %s", recipient, body[:500])
+            return True, "Correo enviado por Brevo."
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "ignore")
+        app.logger.exception("Brevo rechazó el correo a %s. HTTP %s: %s", recipient, exc.code, body)
+        return False, f"Brevo HTTP {exc.code}: {body[:500]}"
+    except Exception as exc:
+        app.logger.exception("No se pudo enviar correo por Brevo a %s: %s", recipient, exc)
+        return False, str(exc)
+
+
+def send_smtp_email_sync(recipient, subject, text_content):
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = os.environ.get("SMTP_FROM")
+    msg["From"] = env_text("SMTP_FROM")
     msg["To"] = recipient
-    msg.set_content("\n".join(lines))
+    msg.set_content(text_content)
 
-    host = os.environ.get("SMTP_HOST")
-    port = int(os.environ.get("SMTP_PORT", "587"))
-    timeout = float(os.environ.get("SMTP_TIMEOUT", "4"))
-    user = os.environ.get("SMTP_USER")
-    password = os.environ.get("SMTP_PASSWORD")
+    host = env_text("SMTP_HOST")
+    port = int(env_text("SMTP_PORT", "587"))
+    timeout = float(env_text("SMTP_TIMEOUT", "4"))
+    user = env_text("SMTP_USER")
+    password = env_text("SMTP_PASSWORD")
     use_ssl = env_bool("SMTP_SSL", default=False)
     force_ipv4 = env_bool("SMTP_FORCE_IPV4", default=True)
 
@@ -179,7 +291,7 @@ def _send_task_email_sync(task, subject, intro, changes=None):
         smtp_ssl_cls = SMTPSSLIPv4 if force_ipv4 else smtplib.SMTP_SSL
         app.logger.info(
             "Intentando correo SMTP host=%s port=%s ssl=%s ipv4=%s destino=%s",
-            host, port, use_ssl, force_ipv4, recipient
+            host, port, use_ssl, force_ipv4, recipient,
         )
         if use_ssl:
             with smtp_ssl_cls(host, port, timeout=timeout) as smtp:
@@ -190,11 +302,29 @@ def _send_task_email_sync(task, subject, intro, changes=None):
                 smtp.starttls()
                 smtp.login(user, password)
                 smtp.send_message(msg)
-        app.logger.info("Correo enviado correctamente para tarea %s a %s", task.get("id"), recipient)
-        return True, "Correo enviado."
+        app.logger.info("Correo enviado por SMTP a %s", recipient)
+        return True, "Correo enviado por SMTP."
     except Exception as exc:
-        app.logger.exception("No se pudo enviar correo de tarea %s: %s", task.get("id"), exc)
+        app.logger.exception("No se pudo enviar correo por SMTP a %s: %s", recipient, exc)
         return False, str(exc)
+
+
+def _send_task_email_sync(task, subject, intro, changes=None):
+    """Envía una notificación al responsable. Prioriza Brevo API HTTPS y conserva SMTP como respaldo."""
+    recipient = (task.get("assignee_email") or "").strip()
+    if not recipient:
+        return False, "La tarea no tiene correo de responsable."
+    if not email_enabled():
+        app.logger.warning("Correo no enviado: notificaciones no configuradas. Destinatario: %s", recipient)
+        return False, email_config_label()
+
+    text_content, html_content = compose_task_email(task, intro, changes)
+    provider = selected_email_provider()
+    if provider == "brevo":
+        return send_brevo_email_sync(recipient, task.get("assignee") or recipient, subject, text_content, html_content)
+    if provider == "smtp":
+        return send_smtp_email_sync(recipient, subject, text_content)
+    return False, email_config_label()
 
 
 def send_task_email(task, subject, intro, changes=None):
@@ -205,10 +335,9 @@ def send_task_email(task, subject, intro, changes=None):
     if not recipient:
         return False, "La tarea no tiene correo de responsable."
     if not email_enabled():
-        app.logger.warning("Correo no programado: SMTP no configurado. Destinatario: %s", recipient)
-        return False, "SMTP no configurado."
+        app.logger.warning("Correo no programado: %s. Destinatario: %s", email_config_label(), recipient)
+        return False, email_config_label()
 
-    # Copia independiente para que el hilo no dependa del request ni de la conexión SQLite.
     task_copy = dict(task)
     changes_copy = list(changes or [])
 
@@ -218,7 +347,6 @@ def send_task_email(task, subject, intro, changes=None):
 
     threading.Thread(target=worker, daemon=True).start()
     return True, "Correo programado en segundo plano."
-
 
 def normalize_status(value):
     return value if value in STATUS_KEYS else "pendiente"
@@ -413,7 +541,7 @@ def force_utf8_headers(response):
 
 @app.context_processor
 def inject_globals():
-    return {"STATUSES": STATUSES, "PRIORITIES": PRIORITIES, "AREAS": AREAS, "STATUS_LABELS": STATUS_LABELS, "EMAIL_ENABLED": email_enabled()}
+    return {"STATUSES": STATUSES, "PRIORITIES": PRIORITIES, "AREAS": AREAS, "STATUS_LABELS": STATUS_LABELS, "EMAIL_ENABLED": email_enabled(), "EMAIL_CONFIG_LABEL": email_config_label()}
 
 
 @app.route("/")
@@ -527,6 +655,36 @@ def exportar_csv():
         writer.writerow({key: task.get(key, "") for key in writer.fieldnames})
     content = output.getvalue().encode("utf-8-sig")
     return Response(content, content_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=kanban_aramark.csv"})
+
+
+
+@app.route("/notificaciones/probar", methods=["POST"])
+def probar_notificaciones():
+    test_email = (request.form.get("test_email") or "").strip()
+    if not test_email:
+        flash("Debes ingresar un correo para la prueba.", "error")
+        return redirect(url_for("index"))
+    fake_task = {
+        "id": 0,
+        "title": "Prueba de notificación",
+        "description": "Correo de prueba del Kanban Operacional Aramark.",
+        "status": "pendiente",
+        "priority": "Media",
+        "assignee": "Usuario de prueba",
+        "assignee_email": test_email,
+        "area": "Operaciones",
+        "due_date": "",
+    }
+    ok, message = _send_task_email_sync(
+        fake_task,
+        "Prueba de correo - Kanban Operacional Aramark",
+        "Este es un correo de prueba para verificar las notificaciones del Kanban Operacional Aramark.",
+    )
+    if ok:
+        flash(f"Correo de prueba enviado a {test_email}.", "success")
+    else:
+        flash(f"No se pudo enviar el correo de prueba: {message}", "error")
+    return redirect(url_for("index"))
 
 
 @app.route("/health")

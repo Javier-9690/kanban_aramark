@@ -14,6 +14,19 @@ services:
         value: /var/data/aramark_kanban.db
       - key: APP_BASE_URL
         value: https://aramark-kanban-operacional.onrender.com
+      - key: EMAIL_PROVIDER
+        value: brevo
+      - key: NOTIFY_EMAIL
+        value: true
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_FROM_EMAIL
+        sync: false
+      - key: BREVO_FROM_NAME
+        value: Kanban Operacional Aramark
+      - key: BREVO_TIMEOUT
+        value: 8
+      # SMTP queda como respaldo opcional, pero Brevo es la opción recomendada en Render.
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

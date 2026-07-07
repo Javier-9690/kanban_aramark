@@ -11,12 +11,17 @@
   </div>
 </section>
 
-{% if not EMAIL_ENABLED %}
-<section class="mail-warning">
-  <strong>Correos no configurados.</strong>
-  La app ya permite registrar el correo del responsable, pero para enviar notificaciones debes configurar SMTP en Render.
+<section class="notify-card {% if not EMAIL_ENABLED %}notify-warning{% endif %}">
+  <div class="notify-info">
+    <strong>Estado de notificaciones</strong>
+    <span>{{ EMAIL_CONFIG_LABEL }}</span>
+    <small>Brevo usa API HTTPS y evita los errores de SMTP en Render.</small>
+  </div>
+  <form method="post" action="{{ url_for('probar_notificaciones') }}" class="notify-test-form">
+    <input type="email" name="test_email" placeholder="correo@empresa.com" required>
+    <button type="submit">Probar correo</button>
+  </form>
 </section>
-{% endif %}
 
 <section class="metrics-grid">
   <article class="metric-card"><span>Total tareas</span><strong>{{ metrics.total }}</strong></article>

@@ -188,3 +188,28 @@ dd { margin: 0; font-size: 12.2px; color: #333; line-height: 1.25; overflow-wrap
 /* Ajuste profesional full-screen: evita barra horizontal inferior del tablero */
 body, .topbar, .container, .footer, .kanban-board, .kanban-column, .task-card { max-width: 100%; }
 .kanban-board, .drop-zone { scrollbar-gutter: stable; }
+
+.notify-card {
+  border: 1px solid #e8d3d5;
+  border-left: 5px solid var(--red);
+  background: #fffafa;
+  padding: 14px;
+  margin: 0 0 18px;
+  border-radius: 7px;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(260px, 420px);
+  gap: 14px;
+  align-items: center;
+}
+.notify-card.notify-warning {
+  border-color: #ffd6a8;
+  border-left-color: var(--warn);
+  background: #fff9f0;
+}
+.notify-info strong { display: block; font-size: 14px; color: #222; text-transform: uppercase; }
+.notify-info span { display: block; margin-top: 4px; font-weight: 800; color: var(--red-dark); }
+.notify-info small { display: block; margin-top: 4px; color: #666; line-height: 1.35; }
+.notify-test-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+@media (max-width: 780px) {
+  .notify-card, .notify-test-form { grid-template-columns: 1fr; }
+}
