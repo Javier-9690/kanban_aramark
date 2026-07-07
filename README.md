@@ -54,3 +54,16 @@ El botón **Editar** abre una página dedicada para evitar problemas de modales 
 ## Movimiento de tareas
 
 El arrastre de tarjetas usa el endpoint `/api/mover` con JSON `{task_id, status}`. También se mantiene `/mover/<id>` por compatibilidad. Esta versión evita errores intermitentes tipo Not Found al mover tarjetas porque valida el ID de tarea y el estado antes de actualizar.
+
+
+## Rendimiento al crear tareas
+
+El envío de correos se realiza en segundo plano para que crear, editar o mover una tarea no quede esperando la respuesta del servidor SMTP.
+
+Variable opcional:
+
+```env
+SMTP_TIMEOUT=4
+```
+
+Si el servidor de correo corporativo demora o rechaza la conexión, la tarea igual queda guardada inmediatamente y el error se registra en los logs de Render.

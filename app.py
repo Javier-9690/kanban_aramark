@@ -4,6 +4,7 @@ import io
 import os
 import smtplib
 import sqlite3
+import threading
 from datetime import datetime, date
 from email.message import EmailMessage
 
@@ -80,7 +81,7 @@ def app_base_url():
     return (os.environ.get("APP_BASE_URL") or "").strip().rstrip("/")
 
 
-def send_task_email(task, subject, intro, changes=None):
+def _send_task_email_sync(task, subject, intro, changes=None):
     """Envía una notificación por correo al responsable de la tarea.
 
     En Render debes configurar SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
@@ -121,17 +122,18 @@ def send_task_email(task, subject, intro, changes=None):
 
     host = os.environ.get("SMTP_HOST")
     port = int(os.environ.get("SMTP_PORT", "587"))
+    timeout = float(os.environ.get("SMTP_TIMEOUT", "4"))
     user = os.environ.get("SMTP_USER")
     password = os.environ.get("SMTP_PASSWORD")
     use_ssl = (os.environ.get("SMTP_SSL") or "").lower() in {"1", "true", "yes", "si", "sí"}
 
     try:
         if use_ssl:
-            with smtplib.SMTP_SSL(host, port, timeout=10) as smtp:
+            with smtplib.SMTP_SSL(host, port, timeout=timeout) as smtp:
                 smtp.login(user, password)
                 smtp.send_message(msg)
         else:
-            with smtplib.SMTP(host, port, timeout=10) as smtp:
+            with smtplib.SMTP(host, port, timeout=timeout) as smtp:
                 smtp.starttls()
                 smtp.login(user, password)
                 smtp.send_message(msg)
@@ -139,6 +141,29 @@ def send_task_email(task, subject, intro, changes=None):
     except Exception as exc:
         app.logger.exception("No se pudo enviar correo de tarea %s: %s", task.get("id"), exc)
         return False, str(exc)
+
+
+def send_task_email(task, subject, intro, changes=None):
+    """Programa el envío de correo en segundo plano para no demorar creación, edición o movimiento de tareas."""
+    if not task:
+        return False, "Tarea no disponible."
+    recipient = (task.get("assignee_email") or "").strip()
+    if not recipient:
+        return False, "La tarea no tiene correo de responsable."
+    if not email_enabled():
+        app.logger.warning("Correo no programado: SMTP no configurado. Destinatario: %s", recipient)
+        return False, "SMTP no configurado."
+
+    # Copia independiente para que el hilo no dependa del request ni de la conexión SQLite.
+    task_copy = dict(task)
+    changes_copy = list(changes or [])
+
+    def worker():
+        with app.app_context():
+            _send_task_email_sync(task_copy, subject, intro, changes_copy)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return True, "Correo programado en segundo plano."
 
 
 def normalize_status(value):
