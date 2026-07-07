@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: aramark-kanban-operacional
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_PATH
+        value: /var/data/aramark_kanban.db
+    disk:
+      name: aramark-kanban-data
+      mountPath: /var/data
+      sizeGB: 1
