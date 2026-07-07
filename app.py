@@ -3,6 +3,7 @@ import csv
 import io
 import os
 import smtplib
+import socket
 import sqlite3
 import threading
 from datetime import datetime, date
@@ -81,6 +82,51 @@ def app_base_url():
     return (os.environ.get("APP_BASE_URL") or "").strip().rstrip("/")
 
 
+def env_bool(name, default=False):
+    value = (os.environ.get(name) or "").strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "si", "sí", "on"}
+
+
+def create_ipv4_connection(host, port, timeout):
+    """Abre una conexión TCP forzando IPv4.
+
+    En algunos entornos cloud, smtp.gmail.com puede resolver primero a IPv6.
+    Si el contenedor no tiene ruta IPv6, Python puede terminar con
+    [Errno 101] Network is unreachable. Esta función evita ese caso usando
+    solo registros A/IPv4.
+    """
+    last_exc = None
+    addresses = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+    if not addresses:
+        raise OSError(f"No se encontraron direcciones IPv4 para {host}:{port}")
+    for family, socktype, proto, _canonname, sockaddr in addresses:
+        sock = socket.socket(family, socktype, proto)
+        sock.settimeout(timeout)
+        try:
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            last_exc = exc
+            try:
+                sock.close()
+            except Exception:
+                pass
+    raise last_exc or OSError(f"No se pudo conectar por IPv4 a {host}:{port}")
+
+
+class SMTPIPv4(smtplib.SMTP):
+    def _get_socket(self, host, port, timeout):
+        return create_ipv4_connection(host, port, timeout)
+
+
+class SMTPSSLIPv4(smtplib.SMTP_SSL):
+    def _get_socket(self, host, port, timeout):
+        raw_socket = create_ipv4_connection(host, port, timeout)
+        return self.context.wrap_socket(raw_socket, server_hostname=self._host)
+
+
 def _send_task_email_sync(task, subject, intro, changes=None):
     """Envía una notificación por correo al responsable de la tarea.
 
@@ -125,18 +171,26 @@ def _send_task_email_sync(task, subject, intro, changes=None):
     timeout = float(os.environ.get("SMTP_TIMEOUT", "4"))
     user = os.environ.get("SMTP_USER")
     password = os.environ.get("SMTP_PASSWORD")
-    use_ssl = (os.environ.get("SMTP_SSL") or "").lower() in {"1", "true", "yes", "si", "sí"}
+    use_ssl = env_bool("SMTP_SSL", default=False)
+    force_ipv4 = env_bool("SMTP_FORCE_IPV4", default=True)
 
     try:
+        smtp_plain_cls = SMTPIPv4 if force_ipv4 else smtplib.SMTP
+        smtp_ssl_cls = SMTPSSLIPv4 if force_ipv4 else smtplib.SMTP_SSL
+        app.logger.info(
+            "Intentando correo SMTP host=%s port=%s ssl=%s ipv4=%s destino=%s",
+            host, port, use_ssl, force_ipv4, recipient
+        )
         if use_ssl:
-            with smtplib.SMTP_SSL(host, port, timeout=timeout) as smtp:
+            with smtp_ssl_cls(host, port, timeout=timeout) as smtp:
                 smtp.login(user, password)
                 smtp.send_message(msg)
         else:
-            with smtplib.SMTP(host, port, timeout=timeout) as smtp:
+            with smtp_plain_cls(host, port, timeout=timeout) as smtp:
                 smtp.starttls()
                 smtp.login(user, password)
                 smtp.send_message(msg)
+        app.logger.info("Correo enviado correctamente para tarea %s a %s", task.get("id"), recipient)
         return True, "Correo enviado."
     except Exception as exc:
         app.logger.exception("No se pudo enviar correo de tarea %s: %s", task.get("id"), exc)

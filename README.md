@@ -43,6 +43,8 @@ La app permite registrar el **correo del responsable** en cada tarea. Para que R
 | `SMTP_FROM` | Correo remitente visible. |
 | `SMTP_SSL` | `true` solo si usas SMTP SSL directo, normalmente en puerto 465. Con puerto 587 dejar `false`. |
 | `APP_BASE_URL` | URL pública de la app en Render, para incluir link directo a la tarea. |
+| `SMTP_TIMEOUT` | Tiempo máximo de espera SMTP en segundos. Recomendado: `4` u `8`. |
+| `SMTP_FORCE_IPV4` | Fuerza conexión IPv4 para evitar errores `[Errno 101] Network is unreachable`. Recomendado: `true`. |
 
 Si estas variables no están configuradas, la aplicación sigue funcionando normalmente, pero mostrará un aviso y no enviará notificaciones.
 
@@ -67,3 +69,21 @@ SMTP_TIMEOUT=4
 ```
 
 Si el servidor de correo corporativo demora o rechaza la conexión, la tarea igual queda guardada inmediatamente y el error se registra en los logs de Render.
+
+### Gmail recomendado en Render
+
+Si usas Gmail, comienza con esta configuración:
+
+```env
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_USER=tu_gmail@gmail.com
+SMTP_PASSWORD=clave_de_aplicacion_sin_espacios
+SMTP_FROM=tu_gmail@gmail.com
+SMTP_SSL=true
+SMTP_TIMEOUT=8
+SMTP_FORCE_IPV4=true
+APP_BASE_URL=https://kanban-aramark.onrender.com
+```
+
+Esta versión fuerza IPv4 por defecto. Si en los logs aparece `Network is unreachable`, normalmente significa que el contenedor no logra abrir conexión al servidor SMTP. Si con `SMTP_FORCE_IPV4=true` sigue fallando, conviene usar un proveedor de correo por API HTTPS.
