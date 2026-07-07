@@ -18,8 +18,13 @@
 </div>
 <div class="form-grid">
   <label>Responsable
-    <input type="text" name="assignee" value="{{ task.assignee }}" maxlength="80">
+    <input type="text" name="assignee" value="{{ task.assignee }}" maxlength="80" placeholder="Nombre del responsable">
   </label>
+  <label>Correo responsable
+    <input type="email" name="assignee_email" value="{{ task.assignee_email }}" maxlength="120" placeholder="responsable@empresa.com">
+  </label>
+</div>
+<div class="form-grid">
   <label>Área
     <select name="area">
       <option value="">Sin área</option>

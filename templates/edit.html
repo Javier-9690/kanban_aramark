@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero edit-hero">
+  <div>
+    <h1>EDITAR TAREA</h1>
+    <p>Actualiza responsable, correo, prioridad, estado y fecha límite.</p>
+  </div>
+  <div class="hero-actions">
+    <a class="btn secondary" href="{{ url_for('index') }}">Volver al tablero</a>
+  </div>
+</section>
+
+{% if not EMAIL_ENABLED %}
+<section class="mail-warning">
+  <strong>Correos no configurados.</strong> Los cambios se guardarán, pero no se enviarán notificaciones hasta configurar SMTP en Render.
+</section>
+{% endif %}
+
+<section class="edit-card">
+  <form method="post" action="{{ url_for('editar', task_id=task.id) }}" class="task-form">
+    {% include "task_form_fields.html" %}
+    <div class="form-actions">
+      <button type="submit">Guardar cambios</button>
+      <a class="btn secondary" href="{{ url_for('index') }}">Cancelar</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

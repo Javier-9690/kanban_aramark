@@ -2,8 +2,10 @@
 import csv
 import io
 import os
+import smtplib
 import sqlite3
 from datetime import datetime, date
+from email.message import EmailMessage
 
 from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_file, url_for
 
@@ -51,6 +53,7 @@ def init_db():
                 status TEXT NOT NULL DEFAULT 'pendiente',
                 priority TEXT NOT NULL DEFAULT 'Media',
                 assignee TEXT,
+                assignee_email TEXT,
                 area TEXT,
                 due_date TEXT,
                 position INTEGER NOT NULL DEFAULT 0,
@@ -59,7 +62,83 @@ def init_db():
             )
             """
         )
+        # Migración segura para bases antiguas ya creadas en Render.
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+        if "assignee_email" not in columns:
+            conn.execute("ALTER TABLE tasks ADD COLUMN assignee_email TEXT")
         conn.commit()
+
+
+
+def email_enabled():
+    """Devuelve True si la app tiene configuración SMTP suficiente para enviar correos."""
+    required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"]
+    return all((os.environ.get(key) or "").strip() for key in required)
+
+
+def app_base_url():
+    return (os.environ.get("APP_BASE_URL") or "").strip().rstrip("/")
+
+
+def send_task_email(task, subject, intro, changes=None):
+    """Envía una notificación por correo al responsable de la tarea.
+
+    En Render debes configurar SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD,
+    SMTP_FROM y opcionalmente APP_BASE_URL. Si no están configuradas, la app
+    sigue funcionando y solo registra el evento en logs.
+    """
+    recipient = (task.get("assignee_email") or "").strip()
+    if not recipient:
+        return False, "La tarea no tiene correo de responsable."
+    if not email_enabled():
+        app.logger.warning("Correo no enviado: SMTP no configurado. Destinatario: %s", recipient)
+        return False, "SMTP no configurado."
+
+    base_url = app_base_url()
+    task_url = f"{base_url}/editar/{task['id']}" if base_url else ""
+    lines = [
+        intro,
+        "",
+        f"Tarea: {task.get('title') or ''}",
+        f"Estado: {STATUS_LABELS.get(task.get('status'), task.get('status') or '')}",
+        f"Prioridad: {task.get('priority') or ''}",
+        f"Responsable: {task.get('assignee') or ''}",
+        f"Área: {task.get('area') or ''}",
+        f"Fecha límite: {task.get('due_date') or 'Sin fecha'}",
+    ]
+    if changes:
+        lines.extend(["", "Cambios registrados:"])
+        lines.extend([f"- {item}" for item in changes])
+    if task_url:
+        lines.extend(["", f"Abrir tarea: {task_url}"])
+    lines.extend(["", "Kanban Operacional Aramark - Campamento 5400"])
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = os.environ.get("SMTP_FROM")
+    msg["To"] = recipient
+    msg.set_content("\n".join(lines))
+
+    host = os.environ.get("SMTP_HOST")
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    user = os.environ.get("SMTP_USER")
+    password = os.environ.get("SMTP_PASSWORD")
+    use_ssl = (os.environ.get("SMTP_SSL") or "").lower() in {"1", "true", "yes", "si", "sí"}
+
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(host, port, timeout=10) as smtp:
+                smtp.login(user, password)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=10) as smtp:
+                smtp.starttls()
+                smtp.login(user, password)
+                smtp.send_message(msg)
+        return True, "Correo enviado."
+    except Exception as exc:
+        app.logger.exception("No se pudo enviar correo de tarea %s: %s", task.get("id"), exc)
+        return False, str(exc)
 
 
 def normalize_status(value):
@@ -98,9 +177,9 @@ def load_tasks(filters=None):
     assignee = (filters.get("assignee") or "").strip()
 
     if q:
-        where.append("(title LIKE ? OR description LIKE ? OR assignee LIKE ? OR area LIKE ?)")
+        where.append("(title LIKE ? OR description LIKE ? OR assignee LIKE ? OR assignee_email LIKE ? OR area LIKE ?)")
         like = f"%{q}%"
-        params.extend([like, like, like, like])
+        params.extend([like, like, like, like, like])
     if area:
         where.append("area = ?")
         params.append(area)
@@ -137,59 +216,112 @@ def metrics_from_tasks(tasks):
     return {"total": total, "finalizados": finalizados, "bloqueados": bloqueados, "vencidos": vencidos, "avance": avance}
 
 
-def create_task_from_form(form):
+def get_task(task_id):
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    return row_to_dict(row) if row else None
+
+
+def form_record(form, current_status="pendiente"):
     title = (form.get("title") or "").strip()
     if not title:
         raise ValueError("El título de la tarea es obligatorio.")
-    status = normalize_status(form.get("status") or "pendiente")
-    record = {
+    return {
         "title": title,
         "description": (form.get("description") or "").strip(),
-        "status": status,
+        "status": normalize_status(form.get("status") or current_status),
         "priority": normalize_priority(form.get("priority") or "Media"),
         "assignee": (form.get("assignee") or "").strip(),
+        "assignee_email": (form.get("assignee_email") or "").strip(),
         "area": (form.get("area") or "").strip(),
         "due_date": (form.get("due_date") or "").strip(),
-        "position": next_position(status),
+    }
+
+
+def create_task_from_form(form):
+    record = form_record(form)
+    record.update({
+        "position": next_position(record["status"]),
         "created_at": now_text(),
         "updated_at": now_text(),
-    }
+    })
     with get_conn() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
-            INSERT INTO tasks (title, description, status, priority, assignee, area, due_date, position, created_at, updated_at)
-            VALUES (:title, :description, :status, :priority, :assignee, :area, :due_date, :position, :created_at, :updated_at)
+            INSERT INTO tasks (title, description, status, priority, assignee, assignee_email, area, due_date, position, created_at, updated_at)
+            VALUES (:title, :description, :status, :priority, :assignee, :assignee_email, :area, :due_date, :position, :created_at, :updated_at)
             """,
             record,
         )
+        task_id = cur.lastrowid
         conn.commit()
+    task = get_task(task_id)
+    send_task_email(
+        task,
+        f"Nueva tarea asignada: {task['title']}",
+        "Se te ha asignado una nueva tarea en el Kanban Operacional Aramark.",
+    )
+    return task
+
+
+def changes_between(old, new):
+    labels = {
+        "title": "Título",
+        "description": "Descripción",
+        "status": "Estado",
+        "priority": "Prioridad",
+        "assignee": "Responsable",
+        "assignee_email": "Correo responsable",
+        "area": "Área",
+        "due_date": "Fecha límite",
+    }
+    changes = []
+    for key, label in labels.items():
+        old_value = old.get(key) or ""
+        new_value = new.get(key) or ""
+        if key == "status":
+            old_value = STATUS_LABELS.get(old_value, old_value)
+            new_value = STATUS_LABELS.get(new_value, new_value)
+        if old_value != new_value:
+            changes.append(f"{label}: {old_value or 'Sin dato'} → {new_value or 'Sin dato'}")
+    return changes
 
 
 def update_task_from_form(task_id, form):
-    title = (form.get("title") or "").strip()
-    if not title:
-        raise ValueError("El título de la tarea es obligatorio.")
-    status = normalize_status(form.get("status") or "pendiente")
+    old_task = get_task(task_id)
+    if old_task is None:
+        raise ValueError("La tarea no existe.")
+    record = form_record(form, current_status=old_task.get("status") or "pendiente")
+    record["updated_at"] = now_text()
+    record["id"] = task_id
     with get_conn() as conn:
         conn.execute(
             """
             UPDATE tasks
-            SET title = ?, description = ?, status = ?, priority = ?, assignee = ?, area = ?, due_date = ?, updated_at = ?
-            WHERE id = ?
+            SET title = :title,
+                description = :description,
+                status = :status,
+                priority = :priority,
+                assignee = :assignee,
+                assignee_email = :assignee_email,
+                area = :area,
+                due_date = :due_date,
+                updated_at = :updated_at
+            WHERE id = :id
             """,
-            (
-                title,
-                (form.get("description") or "").strip(),
-                status,
-                normalize_priority(form.get("priority") or "Media"),
-                (form.get("assignee") or "").strip(),
-                (form.get("area") or "").strip(),
-                (form.get("due_date") or "").strip(),
-                now_text(),
-                task_id,
-            ),
+            record,
         )
         conn.commit()
+    new_task = get_task(task_id)
+    changes = changes_between(old_task, new_task)
+    if changes:
+        send_task_email(
+            new_task,
+            f"Actualización de tarea: {new_task['title']}",
+            "Una tarea asignada a tu nombre fue actualizada en el Kanban Operacional Aramark.",
+            changes,
+        )
+    return new_task
 
 
 @app.after_request
@@ -202,7 +334,7 @@ def force_utf8_headers(response):
 
 @app.context_processor
 def inject_globals():
-    return {"STATUSES": STATUSES, "PRIORITIES": PRIORITIES, "AREAS": AREAS, "STATUS_LABELS": STATUS_LABELS}
+    return {"STATUSES": STATUSES, "PRIORITIES": PRIORITIES, "AREAS": AREAS, "STATUS_LABELS": STATUS_LABELS, "EMAIL_ENABLED": email_enabled()}
 
 
 @app.route("/")
@@ -229,14 +361,21 @@ def crear():
     return redirect(url_for("index"))
 
 
-@app.route("/editar/<int:task_id>", methods=["POST"])
+@app.route("/editar/<int:task_id>", methods=["GET", "POST"])
 def editar(task_id):
-    try:
-        update_task_from_form(task_id, request.form)
-        flash("Tarea actualizada correctamente.", "success")
-    except Exception as exc:
-        flash(f"Error al actualizar tarea: {exc}", "error")
-    return redirect(url_for("index"))
+    task = get_task(task_id)
+    if task is None:
+        flash("La tarea solicitada no existe.", "error")
+        return redirect(url_for("index"))
+    if request.method == "POST":
+        try:
+            update_task_from_form(task_id, request.form)
+            flash("Tarea actualizada correctamente.", "success")
+            return redirect(url_for("index"))
+        except Exception as exc:
+            flash(f"Error al actualizar tarea: {exc}", "error")
+            task = {**task, **request.form}
+    return render_template("edit.html", title=f"Editar tarea - {APP_TITLE}", task=task)
 
 
 @app.route("/eliminar/<int:task_id>", methods=["POST"])
@@ -252,12 +391,21 @@ def eliminar(task_id):
 def mover(task_id):
     payload = request.get_json(silent=True) or request.form
     status = normalize_status(payload.get("status"))
+    old_task = get_task(task_id)
     with get_conn() as conn:
         conn.execute(
             "UPDATE tasks SET status = ?, position = ?, updated_at = ? WHERE id = ?",
             (status, next_position(status), now_text(), task_id),
         )
         conn.commit()
+    task = get_task(task_id)
+    if old_task and old_task.get("status") != status:
+        send_task_email(
+            task,
+            f"Cambio de estado: {task['title']}",
+            "Una tarea asignada a tu nombre cambió de estado en el Kanban Operacional Aramark.",
+            [f"Estado: {STATUS_LABELS.get(old_task.get('status'), old_task.get('status'))} → {STATUS_LABELS.get(status, status)}"],
+        )
     return jsonify({"ok": True, "status": status, "status_label": STATUS_LABELS[status]})
 
 
@@ -265,7 +413,7 @@ def mover(task_id):
 def exportar_csv():
     tasks = load_tasks()
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["id", "title", "description", "status", "priority", "assignee", "area", "due_date", "created_at", "updated_at"])
+    writer = csv.DictWriter(output, fieldnames=["id", "title", "description", "status", "priority", "assignee", "assignee_email", "area", "due_date", "created_at", "updated_at"])
     writer.writeheader()
     for task in tasks:
         writer.writerow({key: task.get(key, "") for key in writer.fieldnames})

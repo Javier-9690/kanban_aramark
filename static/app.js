@@ -1,6 +1,8 @@
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-open-modal]').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       const modal = document.getElementById(btn.dataset.openModal);
       if (modal) modal.classList.add('open');
     });
@@ -12,6 +14,12 @@ document.addEventListener('DOMContentLoaded', () => {
     modal.addEventListener('click', event => {
       if (event.target === modal) modal.classList.remove('open');
     });
+  });
+
+
+  document.querySelectorAll('.task-actions button, .task-actions a, input, select, textarea').forEach(el => {
+    el.addEventListener('mousedown', event => event.stopPropagation());
+    el.addEventListener('dragstart', event => event.preventDefault());
   });
 
   let dragged = null;
