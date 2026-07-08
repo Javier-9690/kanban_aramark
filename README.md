@@ -88,3 +88,10 @@ APP_BASE_URL=https://kanban-aramark.onrender.com
 ```
 
 En Render se recomienda Brevo porque usa HTTPS y evita bloqueos frecuentes de puertos SMTP.
+
+
+## Versión estilo corporativo rojo
+
+- Se ocultaron las tarjetas visibles de estado de notificaciones y base de datos.
+- Se mantuvo el soporte Brevo API y PostgreSQL por variables de entorno.
+- Se aplicó cabecera roja corporativa tipo CampCheck, con logos y navegación central.

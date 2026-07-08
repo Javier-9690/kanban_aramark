@@ -7,9 +7,17 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
-  <header class="topbar">
+  <header class="topbar app-header">
     <div class="brand brand-left">
       <img src="{{ url_for('static', filename='img/logo_aramark.png') }}" alt="Aramark">
+    </div>
+    <div class="header-center">
+      <div class="app-title">▣ Kanban Operacional Aramark</div>
+      <nav class="main-nav" aria-label="Navegación principal">
+        <a class="nav-pill active" href="{{ url_for('index') }}">Inicio</a>
+        <a class="nav-pill" href="#dashboard-urgente">Dashboard</a>
+        <a class="nav-pill" href="#tablero-kanban">Tablero</a>
+      </nav>
     </div>
     <div class="brand brand-right">
       <img src="{{ url_for('static', filename='img/logo_escondida_bhp.png') }}" alt="Escondida BHP">

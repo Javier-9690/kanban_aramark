@@ -334,3 +334,226 @@ body, .topbar, .container, .footer, .kanban-board, .kanban-column, .task-card { 
   .urgent-item { grid-template-columns: 1fr; align-items: start; }
   .urgent-range { display: flex; justify-content: center; width: 100%; }
 }
+
+
+/* =========================================================
+   ESTILO CORPORATIVO ROJO - similar a CampCheck
+   - Se elimina la franja blanca superior anterior.
+   - Header rojo completo con logos y navegación central.
+   - Se mantienen PostgreSQL y Brevo activos, pero sin tarjetas visibles.
+   ========================================================= */
+:root {
+  --red: #b91f17;
+  --red-dark: #98170f;
+  --red-deep: #7f120c;
+  --red-soft: #fff2f1;
+  --orange: #f58220;
+  --text: #141923;
+  --muted: #5f6875;
+  --line: #dedede;
+  --bg: #f3f3f3;
+  --card: #ffffff;
+  --ok: #227344;
+  --warn: #f58220;
+  --danger: #c71e1d;
+}
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+.topbar.app-header {
+  width: 100%;
+  margin: 0;
+  min-height: 126px;
+  padding: 22px 26px 18px;
+  border: 0;
+  border-radius: 0;
+  background: var(--red);
+  color: #fff;
+  box-shadow: none;
+  display: grid;
+  grid-template-columns: minmax(170px, 300px) minmax(320px, 1fr) minmax(190px, 300px);
+  align-items: center;
+  gap: 18px;
+}
+.topbar .brand { display: flex; align-items: center; min-width: 0; }
+.topbar .brand-left { justify-content: flex-start; }
+.topbar .brand-right { justify-content: flex-end; }
+.topbar .brand-left img {
+  height: 54px;
+  max-width: 260px;
+  object-fit: contain;
+}
+.topbar .brand-right img {
+  height: 34px;
+  max-width: 260px;
+  object-fit: contain;
+}
+.header-center {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+.app-title {
+  color: #fff;
+  font-size: clamp(22px, 2.2vw, 31px);
+  font-weight: 900;
+  letter-spacing: -0.4px;
+  text-align: center;
+  line-height: 1.1;
+}
+.main-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.nav-pill {
+  color: #fff;
+  text-decoration: none;
+  font-weight: 800;
+  font-size: 13px;
+  padding: 8px 11px;
+  border-radius: 999px;
+  background: transparent;
+}
+.nav-pill:hover, .nav-pill.active {
+  background: rgba(255,255,255,0.16);
+}
+.container {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 18px 20px 34px;
+  border: 0;
+  background: var(--bg);
+}
+.footer {
+  width: 100%;
+  margin: 0;
+  border-top: 1px solid #dedede;
+  background: #fff;
+}
+.hero,
+.urgent-panel,
+.filter-card,
+.metric-card,
+.edit-card,
+.modal-panel {
+  border-radius: 8px;
+  box-shadow: 0 1px 7px rgba(0,0,0,0.08);
+}
+.hero {
+  background: #fff;
+  border: 1px solid #d7d7d7;
+  padding: 18px 20px;
+  margin-bottom: 18px;
+  align-items: center;
+}
+h1 {
+  font-size: clamp(26px, 2.4vw, 34px);
+  color: #141923;
+}
+h1::after {
+  background: var(--red);
+  height: 3px;
+  width: 132px;
+}
+button, .btn {
+  background: #ed1b2e;
+  border-radius: 7px;
+  min-height: 42px;
+}
+.btn.secondary, button.secondary {
+  background: var(--red-dark);
+}
+.metrics-grid {
+  gap: 18px;
+  margin-top: 18px;
+}
+.metric-card {
+  background: #fff;
+  border: 1px solid #e1e1e1;
+  border-top: 0;
+  min-height: 86px;
+}
+.metric-card span {
+  color: #666;
+}
+.filter-card {
+  background: #fff;
+  border: 1px solid #d7d7d7;
+  border-top: 5px solid #ed1b2e;
+  padding: 18px;
+}
+.urgent-panel {
+  background: #fff;
+  border: 1px solid #d7d7d7;
+  border-top: 5px solid #ed1b2e;
+}
+.urgent-range,
+.status-tag {
+  background: var(--red-soft);
+  color: var(--red-dark);
+}
+.urgent-metrics article {
+  background: #fff;
+  border-color: #e2e2e2;
+}
+.urgent-item {
+  border-color: #e2e2e2;
+}
+.kanban-board {
+  gap: 16px;
+}
+.kanban-column {
+  background: #f6f6f6;
+  border: 1px solid #dcdcdc;
+  border-radius: 8px;
+  min-height: 430px;
+}
+.column-header {
+  border-top: 5px solid #ed1b2e;
+  border-radius: 8px 8px 0 0;
+  padding: 15px 16px;
+}
+.column-header h2 {
+  font-size: clamp(15px, 1.1vw, 19px);
+  color: #0e1726;
+}
+.column-header span {
+  background: #fff0f1;
+  color: var(--red-dark);
+}
+.task-card {
+  border-radius: 8px;
+  border-color: #e5e5e5;
+  border-left-width: 5px;
+  box-shadow: 0 5px 13px rgba(0,0,0,0.06);
+}
+.task-card h3 {
+  text-transform: none;
+  color: #2b2b2b;
+}
+/* Ocultar cualquier bloque de estado si queda en caché o en versiones previas */
+.system-status-grid,
+.notify-card,
+.db-status-card {
+  display: none !important;
+}
+@media (max-width: 900px) {
+  .topbar.app-header {
+    min-height: auto;
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 18px 16px;
+  }
+  .topbar .brand-left,
+  .topbar .brand-right { justify-content: center; }
+  .topbar .brand-left img { height: 44px; }
+  .topbar .brand-right img { height: 28px; }
+  .app-title { order: 0; }
+}

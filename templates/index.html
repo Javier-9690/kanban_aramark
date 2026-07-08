@@ -2,8 +2,8 @@
 {% block content %}
 <section class="hero">
   <div>
-    <h1>KANBAN OPERACIONAL ARAMARK</h1>
-    <p>Gestión visual de tareas, responsables, prioridades y estados operativos.</p>
+    <h1>Tablero Kanban Operacional</h1>
+    <p>Gestión de tareas, responsables, prioridades y acciones urgentes del servicio.</p>
   </div>
   <div class="hero-actions">
     <button type="button" class="btn" data-open-modal="createModal">+ Nueva tarea</button>
@@ -11,26 +11,9 @@
   </div>
 </section>
 
-<section class="system-status-grid">
-  <article class="notify-card {% if not EMAIL_ENABLED %}notify-warning{% endif %}">
-    <div class="notify-info">
-      <strong>Estado de notificaciones</strong>
-      <span>{{ EMAIL_CONFIG_LABEL }}</span>
-      <small>Brevo usa API HTTPS y evita los errores de SMTP en Render.</small>
-    </div>
-    <form method="post" action="{{ url_for('probar_notificaciones') }}" class="notify-test-form">
-      <input type="email" name="test_email" placeholder="correo@empresa.com" required>
-      <button type="submit">Probar correo</button>
-    </form>
-  </article>
-  <article class="db-status-card {% if not IS_POSTGRES %}db-warning{% endif %}">
-    <strong>Base de datos</strong>
-    <span>{{ DB_CONFIG_LABEL }}</span>
-    <small>{% if IS_POSTGRES %}Los datos se guardan en PostgreSQL de Render.{% else %}Para no perder datos en reinicios, configura DATABASE_URL con tu PostgreSQL de Render.{% endif %}</small>
-  </article>
-</section>
 
-<section class="urgent-panel" aria-label="Dashboard de acciones urgentes">
+
+<section class="urgent-panel" id="dashboard-urgente" aria-label="Dashboard de acciones urgentes">
   <div class="urgent-head">
     <div>
       <h2>Dashboard de acciones urgentes</h2>
@@ -100,7 +83,7 @@
   </form>
 </section>
 
-<section class="kanban-board" aria-label="Tablero Kanban">
+<section class="kanban-board" id="tablero-kanban" aria-label="Tablero Kanban">
   {% for status_key, status_label in STATUSES %}
   <section class="kanban-column" data-status="{{ status_key }}">
     <header class="column-header">
