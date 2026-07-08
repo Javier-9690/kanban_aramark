@@ -23,8 +23,6 @@ if not os.path.exists(os.path.dirname(DB_PATH)):
 STATUSES = [
     ("pendiente", "Pendiente"),
     ("en_proceso", "En proceso"),
-    ("revision", "En revisión"),
-    ("bloqueado", "Bloqueado"),
     ("finalizado", "Finalizado"),
 ]
 STATUS_LABELS = dict(STATUSES)
@@ -307,6 +305,18 @@ def init_db():
     sqlite_add_column_if_missing("responsables", "active", "INTEGER NOT NULL DEFAULT 1")
 
 
+
+def normalize_existing_statuses():
+    """Migra estados antiguos a la nueva estructura de 3 columnas."""
+    ts = now_text()
+    try:
+        execute_write("UPDATE tasks SET status = ?, updated_at = ? WHERE status = ?", ("en_proceso", ts, "revision"))
+        execute_write("UPDATE tasks SET status = ?, updated_at = ? WHERE status = ?", ("pendiente", ts, "bloqueado"))
+        execute_write("UPDATE tasks SET status = ?, updated_at = ? WHERE status NOT IN (?, ?, ?)", ("pendiente", ts, "pendiente", "en_proceso", "finalizado"))
+    except Exception:
+        app.logger.exception("No se pudieron normalizar estados antiguos")
+
+
 def env_text(name, default=""):
     return (os.environ.get(name) or default or "").strip()
 
@@ -365,6 +375,12 @@ def parse_due_date(value):
 
 
 def normalize_status(value):
+    value = (value or "").strip()
+    # Compatibilidad con versiones anteriores: se eliminaron En revisión y Bloqueado.
+    if value == "revision":
+        return "en_proceso"
+    if value == "bloqueado":
+        return "pendiente"
     return value if value in STATUS_KEYS else "pendiente"
 
 
@@ -674,10 +690,11 @@ def board_from_tasks(tasks):
 def metrics_from_tasks(tasks):
     total = len(tasks)
     finalizados = sum(1 for t in tasks if t["status"] == "finalizado")
-    bloqueados = sum(1 for t in tasks if t["status"] == "bloqueado")
+    pendientes = sum(1 for t in tasks if t["status"] == "pendiente")
+    en_proceso = sum(1 for t in tasks if t["status"] == "en_proceso")
     vencidos = sum(1 for t in tasks if t.get("is_overdue"))
     avance = round((finalizados / total) * 100, 1) if total else 0.0
-    return {"total": total, "finalizados": finalizados, "bloqueados": bloqueados, "vencidos": vencidos, "avance": avance}
+    return {"total": total, "pendientes": pendientes, "en_proceso": en_proceso, "finalizados": finalizados, "vencidos": vencidos, "avance": avance}
 
 
 def urgency_for_days(days):
@@ -712,7 +729,6 @@ def urgent_dashboard_from_tasks(tasks, window_days=7):
     urgent.sort(key=lambda t: (
         0 if t.get("days_until_due", 0) < 0 else 1,
         t.get("days_until_due", 9999),
-        0 if t.get("status") == "bloqueado" else 1,
         PRIORITY_RANK.get(t.get("priority"), 9),
         (t.get("area") or ""),
         (t.get("title") or "").lower(),
@@ -726,7 +742,6 @@ def urgent_dashboard_from_tasks(tasks, window_days=7):
         "due_today": sum(1 for t in urgent if t.get("days_until_due") == 0),
         "due_week": sum(1 for t in urgent if 0 <= (t.get("days_until_due") or 0) <= window_days),
         "high_priority": sum(1 for t in urgent if t.get("priority") == "Alta"),
-        "blocked": sum(1 for t in urgent if t.get("status") == "bloqueado"),
     }
 
 
@@ -771,7 +786,6 @@ def build_calendar_context(tasks, year, month):
             entries_by_date.setdefault(dstr, []).append(item)
     for items in entries_by_date.values():
         items.sort(key=lambda t: (
-            0 if t.get("status") == "bloqueado" else 1,
             PRIORITY_RANK.get(t.get("priority"), 9),
             (t.get("area") or ""),
             (t.get("title") or "").lower(),
@@ -1411,6 +1425,7 @@ def health():
 
 
 init_db()
+normalize_existing_statuses()
 if env_bool("RUN_MULTIDATE_MIGRATION", default=False):
     split_existing_multidate_tasks()
 

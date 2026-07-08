@@ -30,7 +30,6 @@
     <article><span>Vencen hoy</span><strong>{{ urgent_dashboard.due_today }}</strong></article>
     <article><span>Próximas fechas</span><strong>{{ urgent_dashboard.due_week }}</strong></article>
     <article><span>Alta prioridad</span><strong>{{ urgent_dashboard.high_priority }}</strong></article>
-    <article><span>Bloqueadas</span><strong>{{ urgent_dashboard.blocked }}</strong></article>
   </div>
 
   {% if urgent_dashboard.tasks %}
@@ -60,8 +59,9 @@
 
 <section class="metrics-grid">
   <article class="metric-card"><span>Total acciones</span><strong>{{ metrics.total }}</strong></article>
+  <article class="metric-card"><span>Pendientes</span><strong>{{ metrics.pendientes }}</strong></article>
+  <article class="metric-card"><span>En proceso</span><strong>{{ metrics.en_proceso }}</strong></article>
   <article class="metric-card"><span>Finalizadas</span><strong>{{ metrics.finalizados }}</strong></article>
-  <article class="metric-card"><span>Bloqueadas</span><strong>{{ metrics.bloqueados }}</strong></article>
   <article class="metric-card"><span>Vencidas</span><strong>{{ metrics.vencidos }}</strong></article>
   <article class="metric-card"><span>Avance</span><strong>{{ '%.1f'|format(metrics.avance) }}%</strong></article>
 </section>

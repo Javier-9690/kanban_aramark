@@ -70,7 +70,7 @@ button:hover, .btn:hover { filter: brightness(0.94); }
 .message { padding: 12px 14px; border-radius: 5px; margin-bottom: 8px; font-weight: 700; }
 .message.success { background: #e9f7ec; color: #23652b; border: 1px solid #bae1c0; }
 .message.error { background: #fff0f0; color: #9f1d1d; border: 1px solid #ffcaca; }
-.metrics-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; margin: 18px 0 22px; }
+.metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin: 18px 0 22px; }
 .metric-card { background: #fffafa; border-top: 4px solid var(--red); border-bottom: 1px solid #f0c9cc; padding: 16px; text-align: center; }
 .metric-card span { display: block; color: #666; font-weight: 800; font-size: 12px; text-transform: uppercase; }
 .metric-card strong { display: block; margin-top: 8px; font-size: 30px; color: #222; }
@@ -79,7 +79,7 @@ button:hover, .btn:hover { filter: brightness(0.94); }
 input, select, textarea { width: 100%; border: 1px solid #d4d4d4; padding: 10px; background: #fff; border-radius: 5px; font: inherit; }
 .kanban-board {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   overflow-x: hidden;
   width: 100%;
@@ -270,7 +270,7 @@ body, .topbar, .container, .footer, .kanban-board, .kanban-column, .task-card { 
 }
 .urgent-metrics {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
   margin: 14px 0 16px;
 }
