@@ -11,16 +11,68 @@
   </div>
 </section>
 
-<section class="notify-card {% if not EMAIL_ENABLED %}notify-warning{% endif %}">
-  <div class="notify-info">
-    <strong>Estado de notificaciones</strong>
-    <span>{{ EMAIL_CONFIG_LABEL }}</span>
-    <small>Brevo usa API HTTPS y evita los errores de SMTP en Render.</small>
+<section class="system-status-grid">
+  <article class="notify-card {% if not EMAIL_ENABLED %}notify-warning{% endif %}">
+    <div class="notify-info">
+      <strong>Estado de notificaciones</strong>
+      <span>{{ EMAIL_CONFIG_LABEL }}</span>
+      <small>Brevo usa API HTTPS y evita los errores de SMTP en Render.</small>
+    </div>
+    <form method="post" action="{{ url_for('probar_notificaciones') }}" class="notify-test-form">
+      <input type="email" name="test_email" placeholder="correo@empresa.com" required>
+      <button type="submit">Probar correo</button>
+    </form>
+  </article>
+  <article class="db-status-card {% if not IS_POSTGRES %}db-warning{% endif %}">
+    <strong>Base de datos</strong>
+    <span>{{ DB_CONFIG_LABEL }}</span>
+    <small>{% if IS_POSTGRES %}Los datos se guardan en PostgreSQL de Render.{% else %}Para no perder datos en reinicios, configura DATABASE_URL con tu PostgreSQL de Render.{% endif %}</small>
+  </article>
+</section>
+
+<section class="urgent-panel" aria-label="Dashboard de acciones urgentes">
+  <div class="urgent-head">
+    <div>
+      <h2>Dashboard de acciones urgentes</h2>
+      <p>Rango máximo: desde hoy hasta los próximos {{ urgent_dashboard.window_days }} días. También se incluyen tareas vencidas no finalizadas.</p>
+    </div>
+    <div class="urgent-range">
+      <span>{{ urgent_dashboard.today }}</span>
+      <strong>→</strong>
+      <span>{{ urgent_dashboard.end_date }}</span>
+    </div>
   </div>
-  <form method="post" action="{{ url_for('probar_notificaciones') }}" class="notify-test-form">
-    <input type="email" name="test_email" placeholder="correo@empresa.com" required>
-    <button type="submit">Probar correo</button>
-  </form>
+  <div class="urgent-metrics">
+    <article><span>Vencidas</span><strong>{{ urgent_dashboard.overdue }}</strong></article>
+    <article><span>Vencen hoy</span><strong>{{ urgent_dashboard.due_today }}</strong></article>
+    <article><span>Próximos 7 días</span><strong>{{ urgent_dashboard.due_week }}</strong></article>
+    <article><span>Alta prioridad</span><strong>{{ urgent_dashboard.high_priority }}</strong></article>
+    <article><span>Bloqueadas</span><strong>{{ urgent_dashboard.blocked }}</strong></article>
+  </div>
+
+  {% if urgent_dashboard.tasks %}
+  <div class="urgent-list">
+    {% for task in urgent_dashboard.tasks %}
+    <article class="urgent-item urgency-{{ task.urgency_class }}">
+      <div class="urgent-date">
+        <strong>{{ task.due_date }}</strong>
+        <span>{{ task.urgency_label }}</span>
+      </div>
+      <div class="urgent-main">
+        <h3>{{ task.title }}</h3>
+        <p>{{ task.area or 'Sin área' }} · {{ task.assignee or 'Sin responsable' }}</p>
+      </div>
+      <div class="urgent-tags">
+        <span class="tag priority-tag">{{ task.priority }}</span>
+        <span class="tag status-tag">{{ task.status_label }}</span>
+      </div>
+      <a class="ghost action-link" href="{{ url_for('editar', task_id=task.id) }}">Gestionar</a>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="urgent-empty">No hay acciones urgentes con fecha límite dentro del rango de una semana.</div>
+  {% endif %}
 </section>
 
 <section class="metrics-grid">
@@ -77,7 +129,6 @@
           </form>
         </div>
       </article>
-
       {% endfor %}
     </div>
   </section>

@@ -213,3 +213,124 @@ body, .topbar, .container, .footer, .kanban-board, .kanban-column, .task-card { 
 @media (max-width: 780px) {
   .notify-card, .notify-test-form { grid-template-columns: 1fr; }
 }
+
+/* Dashboard ejecutivo de urgencias y persistencia PostgreSQL */
+.system-status-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(280px, 0.9fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.system-status-grid .notify-card { margin: 0; }
+.db-status-card {
+  border: 1px solid #dfe8df;
+  border-left: 5px solid var(--ok);
+  background: #f7fff8;
+  padding: 14px;
+  border-radius: 7px;
+}
+.db-status-card.db-warning {
+  border-color: #ffd6a8;
+  border-left-color: var(--warn);
+  background: #fff9f0;
+}
+.db-status-card strong { display: block; font-size: 14px; color: #222; text-transform: uppercase; }
+.db-status-card span { display: block; margin-top: 4px; font-weight: 800; color: #23652b; }
+.db-status-card.db-warning span { color: #68420f; }
+.db-status-card small { display: block; margin-top: 6px; color: #666; line-height: 1.35; }
+.urgent-panel {
+  border: 1px solid #f0c9cc;
+  border-top: 5px solid var(--red);
+  background: #fff;
+  padding: 18px;
+  border-radius: 8px;
+  margin: 0 0 22px;
+  box-shadow: 0 8px 20px rgba(237, 27, 46, 0.05);
+}
+.urgent-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+.urgent-head h2 { margin: 0 0 5px; font-size: 24px; color: #202020; }
+.urgent-head p { margin: 0; color: #666; line-height: 1.35; }
+.urgent-range {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--red-soft);
+  color: var(--red-dark);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-weight: 800;
+  font-size: 13px;
+}
+.urgent-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 16px;
+}
+.urgent-metrics article {
+  background: #fff8f9;
+  border: 1px solid #f0d5d8;
+  border-radius: 7px;
+  padding: 12px;
+  text-align: center;
+}
+.urgent-metrics span {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: #6b6b6b;
+}
+.urgent-metrics strong { display: block; margin-top: 5px; font-size: 26px; color: #202020; }
+.urgent-list { display: grid; gap: 10px; }
+.urgent-item {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) minmax(170px, auto) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-left: 5px solid #bcbcbc;
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #fff;
+}
+.urgent-item.urgency-danger { border-left-color: var(--danger); background: #fff7f7; }
+.urgent-item.urgency-warning { border-left-color: var(--warn); background: #fffaf3; }
+.urgent-date strong { display: block; font-size: 13px; color: #222; }
+.urgent-date span { display: block; margin-top: 4px; font-size: 12px; font-weight: 800; color: var(--red-dark); }
+.urgent-main h3 { margin: 0 0 4px; font-size: 15px; color: #202020; overflow-wrap: anywhere; }
+.urgent-main p { margin: 0; font-size: 12px; color: #666; overflow-wrap: anywhere; }
+.urgent-tags { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.tag { border-radius: 999px; padding: 5px 8px; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.priority-tag { background: #f1f1f1; color: #555; }
+.status-tag { background: var(--red-soft); color: var(--red-dark); }
+.urgent-empty {
+  background: #f7f7f7;
+  border: 1px dashed #d7d7d7;
+  color: #666;
+  padding: 14px;
+  border-radius: 7px;
+  text-align: center;
+  font-weight: 700;
+}
+@media (max-width: 1050px) {
+  .system-status-grid { grid-template-columns: 1fr; }
+  .urgent-head { display: block; }
+  .urgent-range { margin-top: 12px; }
+  .urgent-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .urgent-item { grid-template-columns: 130px minmax(0, 1fr); }
+  .urgent-tags { justify-content: flex-start; }
+}
+@media (max-width: 720px) {
+  .urgent-panel { padding: 14px 10px; }
+  .urgent-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .urgent-item { grid-template-columns: 1fr; align-items: start; }
+  .urgent-range { display: flex; justify-content: center; width: 100%; }
+}

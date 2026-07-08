@@ -10,13 +10,14 @@ import sqlite3
 import threading
 import urllib.error
 import urllib.request
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from email.message import EmailMessage
 
-from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_file, url_for
+from flask import Flask, Response, flash, jsonify, redirect, render_template, request, url_for
 
 APP_TITLE = "Kanban Operacional Aramark"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
 DB_PATH = os.environ.get("DATABASE_PATH", "/var/data/aramark_kanban.db")
 if not os.path.exists(os.path.dirname(DB_PATH)):
     DB_PATH = os.path.join(BASE_DIR, "aramark_kanban.db")
@@ -31,6 +32,7 @@ STATUSES = [
 STATUS_LABELS = dict(STATUSES)
 STATUS_KEYS = [s[0] for s in STATUSES]
 PRIORITIES = ["Alta", "Media", "Baja"]
+PRIORITY_RANK = {"Alta": 0, "Media": 1, "Baja": 2}
 AREAS = ["Operaciones", "Calidad", "Mantención", "Seguridad", "Bodega", "Habitabilidad", "Administración"]
 
 app = Flask(__name__)
@@ -41,15 +43,146 @@ def now_text():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def is_postgres():
+    return DATABASE_URL.lower().startswith(("postgres://", "postgresql://"))
+
+
+def db_config_label():
+    if is_postgres():
+        return "PostgreSQL activo por DATABASE_URL"
+    return "SQLite local activo; configura DATABASE_URL para persistencia PostgreSQL"
+
+
 def get_conn():
+    if is_postgres():
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError(
+                "Falta instalar psycopg. Revisa requirements.txt y vuelve a desplegar en Render."
+            ) from exc
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+def adapt_sql(sql):
+    return sql.replace("?", "%s") if is_postgres() else sql
+
+
+def row_as_dict(row):
+    if row is None:
+        return None
+    return dict(row)
+
+
+def query_all(sql, params=()):
+    conn = get_conn()
+    try:
+        if is_postgres():
+            with conn.cursor() as cur:
+                cur.execute(adapt_sql(sql), tuple(params))
+                rows = cur.fetchall()
+        else:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        return [row_as_dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def query_one(sql, params=()):
+    conn = get_conn()
+    try:
+        if is_postgres():
+            with conn.cursor() as cur:
+                cur.execute(adapt_sql(sql), tuple(params))
+                row = cur.fetchone()
+        else:
+            row = conn.execute(sql, tuple(params)).fetchone()
+        return row_as_dict(row)
+    finally:
+        conn.close()
+
+
+def execute_returning(sql, params=()):
+    conn = get_conn()
+    try:
+        if not is_postgres():
+            raise RuntimeError("execute_returning solo se usa con PostgreSQL.")
+        with conn.cursor() as cur:
+            cur.execute(adapt_sql(sql), tuple(params))
+            row = cur.fetchone()
+        conn.commit()
+        return row_as_dict(row)
+    finally:
+        conn.close()
+
+
+def execute_write(sql, params=()):
+    conn = get_conn()
+    try:
+        if is_postgres():
+            with conn.cursor() as cur:
+                cur.execute(adapt_sql(sql), tuple(params))
+                rowcount = cur.rowcount
+            conn.commit()
+        else:
+            cur = conn.execute(sql, tuple(params))
+            rowcount = cur.rowcount
+            conn.commit()
+        return rowcount
+    finally:
+        conn.close()
+
+
+def execute_script(statements):
+    conn = get_conn()
+    try:
+        if is_postgres():
+            with conn.cursor() as cur:
+                for sql in statements:
+                    cur.execute(sql)
+            conn.commit()
+        else:
+            for sql in statements:
+                conn.execute(sql)
+            conn.commit()
+    finally:
+        conn.close()
+
+
 def init_db():
+    if is_postgres():
+        execute_script([
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                status TEXT NOT NULL DEFAULT 'pendiente',
+                priority TEXT NOT NULL DEFAULT 'Media',
+                assignee TEXT,
+                assignee_email TEXT,
+                area TEXT,
+                due_date TEXT,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """,
+            "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_email TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_tasks_status_position ON tasks(status, position)",
+            "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)",
+            "CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)",
+            "CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)",
+        ])
+        return
+
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    with get_conn() as conn:
+    conn = get_conn()
+    try:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tasks (
@@ -68,12 +201,16 @@ def init_db():
             )
             """
         )
-        # Migración segura para bases antiguas ya creadas en Render.
         columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
         if "assignee_email" not in columns:
             conn.execute("ALTER TABLE tasks ADD COLUMN assignee_email TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status_position ON tasks(status, position)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)")
         conn.commit()
-
+    finally:
+        conn.close()
 
 
 def env_text(name, default=""):
@@ -88,7 +225,6 @@ def env_bool(name, default=False):
 
 
 def notifications_active():
-    """Permite apagar notificaciones sin borrar credenciales."""
     return env_bool("NOTIFY_EMAIL", default=True)
 
 
@@ -110,7 +246,6 @@ def smtp_enabled():
 
 
 def selected_email_provider():
-    """Proveedor activo. Brevo se prioriza porque usa HTTPS y evita problemas SMTP en Render."""
     if not notifications_active():
         return "disabled"
     preferred = env_text("EMAIL_PROVIDER", "auto").lower()
@@ -145,7 +280,6 @@ def email_config_label():
 
 
 def create_ipv4_connection(host, port, timeout):
-    """Abre una conexión TCP forzando IPv4 para compatibilidad SMTP."""
     last_exc = None
     addresses = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
     if not addresses:
@@ -310,7 +444,6 @@ def send_smtp_email_sync(recipient, subject, text_content):
 
 
 def _send_task_email_sync(task, subject, intro, changes=None):
-    """Envía una notificación al responsable. Prioriza Brevo API HTTPS y conserva SMTP como respaldo."""
     recipient = (task.get("assignee_email") or "").strip()
     if not recipient:
         return False, "La tarea no tiene correo de responsable."
@@ -328,7 +461,6 @@ def _send_task_email_sync(task, subject, intro, changes=None):
 
 
 def send_task_email(task, subject, intro, changes=None):
-    """Programa el envío de correo en segundo plano para no demorar creación, edición o movimiento de tareas."""
     if not task:
         return False, "Tarea no disponible."
     recipient = (task.get("assignee_email") or "").strip()
@@ -348,6 +480,7 @@ def send_task_email(task, subject, intro, changes=None):
     threading.Thread(target=worker, daemon=True).start()
     return True, "Correo programado en segundo plano."
 
+
 def normalize_status(value):
     return value if value in STATUS_KEYS else "pendiente"
 
@@ -356,21 +489,29 @@ def normalize_priority(value):
     return value if value in PRIORITIES else "Media"
 
 
+def parse_due_date(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
 def next_position(status):
-    with get_conn() as conn:
-        row = conn.execute("SELECT COALESCE(MAX(position), 0) + 1 AS pos FROM tasks WHERE status = ?", (status,)).fetchone()
-    return int(row["pos"] or 1)
+    row = query_one("SELECT COALESCE(MAX(position), 0) + 1 AS pos FROM tasks WHERE status = ?", (status,))
+    return int(row.get("pos") or 1) if row else 1
 
 
 def row_to_dict(row):
     item = dict(row)
-    item["status_label"] = STATUS_LABELS.get(item["status"], item["status"])
+    item["status_label"] = STATUS_LABELS.get(item.get("status"), item.get("status"))
     item["is_overdue"] = False
-    if item.get("due_date") and item.get("status") != "finalizado":
-        try:
-            item["is_overdue"] = datetime.strptime(item["due_date"], "%Y-%m-%d").date() < date.today()
-        except ValueError:
-            item["is_overdue"] = False
+    item["days_until_due"] = None
+    due = parse_due_date(item.get("due_date"))
+    if due:
+        item["days_until_due"] = (due - date.today()).days
+        item["is_overdue"] = item.get("status") != "finalizado" and due < date.today()
     return item
 
 
@@ -382,9 +523,10 @@ def load_tasks(filters=None):
     area = (filters.get("area") or "").strip()
     priority = (filters.get("priority") or "").strip()
     assignee = (filters.get("assignee") or "").strip()
+    like_operator = "ILIKE" if is_postgres() else "LIKE"
 
     if q:
-        where.append("(title LIKE ? OR description LIKE ? OR assignee LIKE ? OR assignee_email LIKE ? OR area LIKE ?)")
+        where.append(f"(title {like_operator} ? OR description {like_operator} ? OR assignee {like_operator} ? OR assignee_email {like_operator} ? OR area {like_operator} ?)")
         like = f"%{q}%"
         params.extend([like, like, like, like, like])
     if area:
@@ -394,7 +536,7 @@ def load_tasks(filters=None):
         where.append("priority = ?")
         params.append(priority)
     if assignee:
-        where.append("assignee LIKE ?")
+        where.append(f"assignee {like_operator} ?")
         params.append(f"%{assignee}%")
 
     sql = "SELECT * FROM tasks"
@@ -402,8 +544,7 @@ def load_tasks(filters=None):
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY status, position, updated_at DESC"
 
-    with get_conn() as conn:
-        rows = conn.execute(sql, params).fetchall()
+    rows = query_all(sql, params)
     return [row_to_dict(row) for row in rows]
 
 
@@ -423,9 +564,57 @@ def metrics_from_tasks(tasks):
     return {"total": total, "finalizados": finalizados, "bloqueados": bloqueados, "vencidos": vencidos, "avance": avance}
 
 
+def urgent_dashboard_from_tasks(tasks, window_days=7):
+    today = date.today()
+    end_date = today + timedelta(days=window_days)
+    urgent = []
+    for task in tasks:
+        if task.get("status") == "finalizado":
+            continue
+        due = parse_due_date(task.get("due_date"))
+        if not due:
+            continue
+        if due <= end_date:
+            days = (due - today).days
+            item = dict(task)
+            item["days_until_due"] = days
+            if days < 0:
+                item["urgency_label"] = "Vencida"
+                item["urgency_class"] = "danger"
+            elif days == 0:
+                item["urgency_label"] = "Vence hoy"
+                item["urgency_class"] = "danger"
+            elif days <= 3:
+                item["urgency_label"] = f"Vence en {days} día{'s' if days != 1 else ''}"
+                item["urgency_class"] = "warning"
+            else:
+                item["urgency_label"] = f"Vence en {days} días"
+                item["urgency_class"] = "normal"
+            urgent.append(item)
+
+    urgent.sort(key=lambda t: (
+        0 if t.get("days_until_due", 0) < 0 else 1,
+        t.get("days_until_due", 9999),
+        0 if t.get("status") == "bloqueado" else 1,
+        PRIORITY_RANK.get(t.get("priority"), 9),
+        (t.get("area") or ""),
+        (t.get("title") or "").lower(),
+    ))
+    return {
+        "today": today.strftime("%Y-%m-%d"),
+        "end_date": end_date.strftime("%Y-%m-%d"),
+        "window_days": window_days,
+        "tasks": urgent,
+        "overdue": sum(1 for t in urgent if t.get("days_until_due", 0) < 0),
+        "due_today": sum(1 for t in urgent if t.get("days_until_due") == 0),
+        "due_week": sum(1 for t in urgent if 0 <= (t.get("days_until_due") or 0) <= window_days),
+        "high_priority": sum(1 for t in urgent if t.get("priority") == "Alta"),
+        "blocked": sum(1 for t in urgent if t.get("status") == "bloqueado"),
+    }
+
+
 def get_task(task_id):
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    row = query_one("SELECT * FROM tasks WHERE id = ?", (task_id,))
     return row_to_dict(row) if row else None
 
 
@@ -445,6 +634,39 @@ def form_record(form, current_status="pendiente"):
     }
 
 
+def insert_task_record(record):
+    values = (
+        record["title"], record["description"], record["status"], record["priority"],
+        record["assignee"], record["assignee_email"], record["area"], record["due_date"],
+        record["position"], record["created_at"], record["updated_at"],
+    )
+    if is_postgres():
+        row = execute_returning(
+            """
+            INSERT INTO tasks (title, description, status, priority, assignee, assignee_email, area, due_date, position, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id
+            """,
+            values,
+        )
+        return int(row["id"])
+
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO tasks (title, description, status, priority, assignee, assignee_email, area, due_date, position, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            values,
+        )
+        task_id = cur.lastrowid
+        conn.commit()
+        return int(task_id)
+    finally:
+        conn.close()
+
+
 def create_task_from_form(form):
     record = form_record(form)
     record.update({
@@ -452,16 +674,7 @@ def create_task_from_form(form):
         "created_at": now_text(),
         "updated_at": now_text(),
     })
-    with get_conn() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO tasks (title, description, status, priority, assignee, assignee_email, area, due_date, position, created_at, updated_at)
-            VALUES (:title, :description, :status, :priority, :assignee, :assignee_email, :area, :due_date, :position, :created_at, :updated_at)
-            """,
-            record,
-        )
-        task_id = cur.lastrowid
-        conn.commit()
+    task_id = insert_task_record(record)
     task = get_task(task_id)
     send_task_email(
         task,
@@ -500,25 +713,26 @@ def update_task_from_form(task_id, form):
         raise ValueError("La tarea no existe.")
     record = form_record(form, current_status=old_task.get("status") or "pendiente")
     record["updated_at"] = now_text()
-    record["id"] = task_id
-    with get_conn() as conn:
-        conn.execute(
-            """
-            UPDATE tasks
-            SET title = :title,
-                description = :description,
-                status = :status,
-                priority = :priority,
-                assignee = :assignee,
-                assignee_email = :assignee_email,
-                area = :area,
-                due_date = :due_date,
-                updated_at = :updated_at
-            WHERE id = :id
-            """,
-            record,
-        )
-        conn.commit()
+    execute_write(
+        """
+        UPDATE tasks
+        SET title = ?,
+            description = ?,
+            status = ?,
+            priority = ?,
+            assignee = ?,
+            assignee_email = ?,
+            area = ?,
+            due_date = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            record["title"], record["description"], record["status"], record["priority"],
+            record["assignee"], record["assignee_email"], record["area"], record["due_date"],
+            record["updated_at"], task_id,
+        ),
+    )
     new_task = get_task(task_id)
     changes = changes_between(old_task, new_task)
     if changes:
@@ -541,7 +755,16 @@ def force_utf8_headers(response):
 
 @app.context_processor
 def inject_globals():
-    return {"STATUSES": STATUSES, "PRIORITIES": PRIORITIES, "AREAS": AREAS, "STATUS_LABELS": STATUS_LABELS, "EMAIL_ENABLED": email_enabled(), "EMAIL_CONFIG_LABEL": email_config_label()}
+    return {
+        "STATUSES": STATUSES,
+        "PRIORITIES": PRIORITIES,
+        "AREAS": AREAS,
+        "STATUS_LABELS": STATUS_LABELS,
+        "EMAIL_ENABLED": email_enabled(),
+        "EMAIL_CONFIG_LABEL": email_config_label(),
+        "DB_CONFIG_LABEL": db_config_label(),
+        "IS_POSTGRES": is_postgres(),
+    }
 
 
 @app.route("/")
@@ -552,10 +775,19 @@ def index():
         "priority": request.args.get("priority", ""),
         "assignee": request.args.get("assignee", ""),
     }
-    tasks = load_tasks(filters)
-    board = board_from_tasks(tasks)
-    metrics = metrics_from_tasks(tasks)
-    return render_template("index.html", title=APP_TITLE, board=board, metrics=metrics, filters=filters)
+    all_tasks = load_tasks()
+    filtered_tasks = load_tasks(filters)
+    board = board_from_tasks(filtered_tasks)
+    metrics = metrics_from_tasks(all_tasks)
+    urgent_dashboard = urgent_dashboard_from_tasks(all_tasks, window_days=7)
+    return render_template(
+        "index.html",
+        title=APP_TITLE,
+        board=board,
+        metrics=metrics,
+        filters=filters,
+        urgent_dashboard=urgent_dashboard,
+    )
 
 
 @app.route("/crear", methods=["POST"])
@@ -564,6 +796,7 @@ def crear():
         create_task_from_form(request.form)
         flash("Tarea creada correctamente.", "success")
     except Exception as exc:
+        app.logger.exception("Error al crear tarea")
         flash(f"Error al crear tarea: {exc}", "error")
     return redirect(url_for("index"))
 
@@ -580,6 +813,7 @@ def editar(task_id):
             flash("Tarea actualizada correctamente.", "success")
             return redirect(url_for("index"))
         except Exception as exc:
+            app.logger.exception("Error al actualizar tarea")
             flash(f"Error al actualizar tarea: {exc}", "error")
             task = {**task, **request.form}
     return render_template("edit.html", title=f"Editar tarea - {APP_TITLE}", task=task)
@@ -587,15 +821,12 @@ def editar(task_id):
 
 @app.route("/eliminar/<int:task_id>", methods=["POST"])
 def eliminar(task_id):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-        conn.commit()
+    execute_write("DELETE FROM tasks WHERE id = ?", (task_id,))
     flash("Tarea eliminada.", "success")
     return redirect(url_for("index"))
 
 
 def move_task_to_status(task_id, status):
-    """Mueve una tarea de forma segura y devuelve respuesta JSON consistente."""
     try:
         task_id = int(task_id)
     except (TypeError, ValueError):
@@ -608,14 +839,12 @@ def move_task_to_status(task_id, status):
     if old_task is None:
         return jsonify({"ok": False, "error": "La tarea no existe o ya fue eliminada. Recarga el tablero."}), 404
 
-    with get_conn() as conn:
-        cur = conn.execute(
-            "UPDATE tasks SET status = ?, position = ?, updated_at = ? WHERE id = ?",
-            (status, next_position(status), now_text(), task_id),
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            return jsonify({"ok": False, "error": "No se encontró la tarea al actualizar."}), 404
+    rowcount = execute_write(
+        "UPDATE tasks SET status = ?, position = ?, updated_at = ? WHERE id = ?",
+        (status, next_position(status), now_text(), task_id),
+    )
+    if rowcount == 0:
+        return jsonify({"ok": False, "error": "No se encontró la tarea al actualizar."}), 404
 
     task = get_task(task_id)
     if task and old_task.get("status") != status:
@@ -636,8 +865,6 @@ def mover_api():
 
 @app.route("/mover/<int:task_id>", methods=["GET", "POST"])
 def mover(task_id):
-    # Compatibilidad con versiones antiguas del JavaScript. Si el navegador llega por GET,
-    # se evita una pantalla Not Found y se vuelve al tablero.
     if request.method == "GET":
         flash("Movimiento no aplicado: usa arrastrar y soltar desde el tablero.", "error")
         return redirect(url_for("index"))
@@ -649,13 +876,15 @@ def mover(task_id):
 def exportar_csv():
     tasks = load_tasks()
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["id", "title", "description", "status", "priority", "assignee", "assignee_email", "area", "due_date", "created_at", "updated_at"])
+    writer = csv.DictWriter(
+        output,
+        fieldnames=["id", "title", "description", "status", "priority", "assignee", "assignee_email", "area", "due_date", "created_at", "updated_at"],
+    )
     writer.writeheader()
     for task in tasks:
         writer.writerow({key: task.get(key, "") for key in writer.fieldnames})
     content = output.getvalue().encode("utf-8-sig")
     return Response(content, content_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=kanban_aramark.csv"})
-
 
 
 @app.route("/notificaciones/probar", methods=["POST"])
@@ -689,7 +918,7 @@ def probar_notificaciones():
 
 @app.route("/health")
 def health():
-    return {"status": "ok", "app": APP_TITLE}
+    return {"status": "ok", "app": APP_TITLE, "database": "postgresql" if is_postgres() else "sqlite"}
 
 
 init_db()

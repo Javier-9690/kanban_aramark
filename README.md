@@ -11,7 +11,40 @@ App Flask tipo Kanban para gestión visual de tareas operativas del Campamento 5
 - Diseño adaptado a pantalla completa sin barra horizontal inferior.
 - Notificaciones por correo en segundo plano.
 - Soporte recomendado para Brevo por API HTTPS.
-- SMTP queda disponible como respaldo opcional.
+- Soporte para PostgreSQL de Render mediante `DATABASE_URL`.
+- Dashboard ejecutivo de acciones urgentes con rango máximo de 7 días.
+
+## PostgreSQL en Render
+
+Para guardar los datos en PostgreSQL y no depender del archivo SQLite temporal/local:
+
+1. Entra a tu servicio web en Render.
+2. Ve a **Environment**.
+3. Agrega una variable:
+
+```env
+DATABASE_URL=PEGA_AQUI_EL_INTERNAL_DATABASE_URL_DE_TU_POSTGRESQL_RENDER
+```
+
+4. Guarda con **Save, rebuild, and deploy**.
+
+La app detecta automáticamente `DATABASE_URL`. Si existe, usa PostgreSQL. Si no existe, usa SQLite como respaldo.
+
+### Dónde encontrar `DATABASE_URL`
+
+En Render abre tu base PostgreSQL y copia preferentemente el **Internal Database URL**. Ese valor va completo en `DATABASE_URL` del servicio web Kanban.
+
+## Dashboard de urgencias
+
+La pantalla principal incluye un dashboard de acciones urgentes con rango máximo de una semana:
+
+- Tareas vencidas no finalizadas.
+- Tareas que vencen hoy.
+- Tareas que vencen dentro de los próximos 7 días.
+- Tareas de alta prioridad dentro del rango.
+- Tareas bloqueadas dentro del rango.
+
+Solo considera tareas con fecha límite. Para que una tarea aparezca como urgente, debe tener `Fecha límite`.
 
 ## Configuración recomendada en Render para Brevo
 
@@ -25,7 +58,7 @@ BREVO_FROM_EMAIL=correo_verificado_en_brevo@dominio.com
 BREVO_FROM_NAME=Kanban Operacional Aramark
 BREVO_TIMEOUT=8
 APP_BASE_URL=https://kanban-aramark.onrender.com
-DATABASE_PATH=/var/data/aramark_kanban.db
+DATABASE_URL=PEGA_AQUI_EL_INTERNAL_DATABASE_URL_DE_POSTGRESQL
 ```
 
 Después presiona **Save, rebuild, and deploy**.
