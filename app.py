@@ -30,7 +30,7 @@ STATUS_LABELS = dict(STATUSES)
 STATUS_KEYS = [s[0] for s in STATUSES]
 PRIORITIES = ["Alta", "Media", "Baja"]
 PRIORITY_RANK = {"Alta": 0, "Media": 1, "Baja": 2}
-AREAS = ["Operaciones", "Calidad", "Mantención", "Seguridad", "Bodega", "Habitabilidad", "Administración"]
+AREAS = ["Calidad", "Hotelería", "Food", "Facility", "Prevención de riesgos", "RRHH", "Gerencia"]
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "cambiar-esta-clave-en-render")
