@@ -44,3 +44,8 @@ BREVO_TIMEOUT=8
 1. Sube todo a GitHub.
 2. En Render configura variables de entorno.
 3. Usa `Manual Deploy -> Clear build cache & deploy`.
+
+
+## Regla de multifechas
+
+Cuando una acción se crea o edita con varias fechas, la aplicación genera una tarjeta/acción independiente por cada día. Esto evita que una modificación aplicada a una fecha afecte a las demás. Al iniciar, la app también separa automáticamente las acciones antiguas que todavía tengan múltiples fechas registradas.

@@ -890,21 +890,63 @@ def insert_task_record(record):
     return int(row["id"])
 
 
-def create_task_from_form(form):
-    record = task_record_from_form(form)
-    record.update({"position": next_position(record["status"]), "created_at": now_text(), "updated_at": now_text()})
+def clone_record_for_single_date(base_record, action_date):
+    """Crea un registro de acción independiente para una fecha específica.
+
+    La regla operativa nueva es que una fecha equivale a una tarjeta/acción propia.
+    Así, si se asigna la misma actividad a varios días, editar una tarjeta no
+    modifica las demás fechas.
+    """
+    clean_date = normalize_date_value(action_date)
+    record = dict(base_record)
+    record["task_dates"] = [clean_date] if clean_date else []
+    record["due_date"] = clean_date
+    record["position"] = next_position(record["status"])
+    record["created_at"] = now_text()
+    record["updated_at"] = now_text()
+    return record
+
+
+def create_single_task(record, responsible_ids=None, notify=True):
+    """Inserta una acción con una sola fecha y copia responsables."""
     task_id = insert_task_record(record)
-    assign_responsibles(task_id, form.getlist("responsible_ids"))
+    assign_responsibles(task_id, responsible_ids or [])
     set_task_dates(task_id, record.get("task_dates", []))
     task = get_task(task_id)
-    notify_task(
-        task,
-        f"Nueva acción asignada: {task['title']}",
-        "Se creó una nueva acción en el Kanban Operacional Aramark.",
-        event_type="creacion",
-        event_label="Nueva acción creada",
-    )
+    if notify and task:
+        notify_task(
+            task,
+            f"Nueva acción asignada: {task['title']}",
+            "Se creó una nueva acción individual en el Kanban Operacional Aramark.",
+            event_type="creacion",
+            event_label="Nueva acción creada",
+        )
     return task
+
+
+def create_tasks_from_form(form):
+    """Crea una acción independiente por cada fecha seleccionada.
+
+    Antes una acción podía tener varias fechas, lo que provocaba que editarla
+    impactara todas sus ocurrencias. Ahora, si el usuario ingresa varias fechas,
+    el sistema genera tarjetas separadas: una por día.
+    """
+    base_record = task_record_from_form(form)
+    dates = base_record.get("task_dates") or []
+    if not dates:
+        dates = [""]
+    created_tasks = []
+    responsible_ids = form.getlist("responsible_ids") if hasattr(form, "getlist") else []
+    for action_date in dates:
+        record = clone_record_for_single_date(base_record, action_date)
+        created_tasks.append(create_single_task(record, responsible_ids=responsible_ids, notify=True))
+    return created_tasks
+
+
+def create_task_from_form(form):
+    """Compatibilidad con versiones anteriores: retorna la primera acción creada."""
+    created_tasks = create_tasks_from_form(form)
+    return created_tasks[0] if created_tasks else None
 
 
 def changes_between(old, new, old_resps=None, new_resps=None):
@@ -935,6 +977,15 @@ def update_task_from_form(task_id, form):
         raise ValueError("La tarea no existe.")
     old_resps = get_task_responsibles(task_id)
     record = task_record_from_form(form, current_status=old_task.get("status") or "pendiente")
+    dates = record.get("task_dates") or []
+    if not dates:
+        dates = [""]
+
+    # Al editar, la tarjeta actual conserva solo la primera fecha.
+    # Las fechas adicionales generan acciones nuevas e independientes.
+    primary_date = normalize_date_value(dates[0]) if dates else ""
+    record["due_date"] = primary_date
+    record["task_dates"] = [primary_date] if primary_date else []
     record["updated_at"] = now_text()
     execute_write(
         """
@@ -944,11 +995,22 @@ def update_task_from_form(task_id, form):
         """,
         (record["title"], record["description"], record["status"], record["priority"], record["area"], record["due_date"], record["updated_at"], task_id),
     )
-    assign_responsibles(task_id, form.getlist("responsible_ids"))
+    responsible_ids = form.getlist("responsible_ids") if hasattr(form, "getlist") else []
+    assign_responsibles(task_id, responsible_ids)
     set_task_dates(task_id, record.get("task_dates", []))
+
+    created_extra_tasks = []
+    for extra_date in dates[1:]:
+        extra_record = clone_record_for_single_date(record, extra_date)
+        extra_record["created_at"] = now_text()
+        extra_record["updated_at"] = now_text()
+        created_extra_tasks.append(create_single_task(extra_record, responsible_ids=responsible_ids, notify=True))
+
     new_task = get_task(task_id)
     new_resps = get_task_responsibles(task_id)
     changes = changes_between(old_task, new_task, old_resps, new_resps)
+    if created_extra_tasks:
+        changes.append(f"Se generaron {len(created_extra_tasks)} acción(es) independiente(s) adicional(es) para las otras fechas.")
     if changes:
         notify_task(
             new_task,
@@ -958,7 +1020,53 @@ def update_task_from_form(task_id, form):
             event_type="actualizacion",
             event_label="Acción actualizada",
         )
-    return new_task
+    return new_task, created_extra_tasks
+
+
+def split_existing_multidate_tasks():
+    """Migra acciones antiguas con múltiples fechas a tarjetas individuales.
+
+    Esta función es idempotente: después de ejecutarse, cada acción queda con
+    una sola fecha en task_dates, por lo que no vuelve a duplicar tarjetas en
+    próximos reinicios. No envía correos para no notificar migraciones técnicas.
+    """
+    try:
+        rows = query_all(
+            """
+            SELECT task_id, COUNT(*) AS total
+            FROM task_dates
+            GROUP BY task_id
+            HAVING COUNT(*) > 1
+            """
+        )
+        for row in rows:
+            task_id = row.get("task_id")
+            task = get_task(task_id)
+            if not task:
+                continue
+            dates = get_task_dates(task_id)
+            if len(dates) <= 1:
+                continue
+            responsible_ids = [str(r["id"]) for r in get_task_responsibles(task_id)]
+            first_date = dates[0]
+            set_task_dates(task_id, [first_date])
+            execute_write("UPDATE tasks SET due_date = ?, updated_at = ? WHERE id = ?", (first_date, now_text(), task_id))
+            base_record = {
+                "title": task.get("title") or "",
+                "description": task.get("description") or "",
+                "status": normalize_status(task.get("status") or "pendiente"),
+                "priority": normalize_priority(task.get("priority") or "Media"),
+                "area": task.get("area") or "",
+                "due_date": first_date,
+                "task_dates": [first_date],
+            }
+            for extra_date in dates[1:]:
+                extra_record = clone_record_for_single_date(base_record, extra_date)
+                create_single_task(extra_record, responsible_ids=responsible_ids, notify=False)
+        if rows:
+            app.logger.info("Migración multifecha aplicada a %s acción(es).", len(rows))
+    except Exception as exc:
+        app.logger.exception("No se pudo migrar acciones multifecha: %s", exc)
 
 
 @app.after_request
@@ -1024,8 +1132,11 @@ def calendario():
 @app.route("/crear", methods=["POST"])
 def crear():
     try:
-        create_task_from_form(request.form)
-        flash("Acción creada correctamente.", "success")
+        created_tasks = create_tasks_from_form(request.form)
+        if len(created_tasks) > 1:
+            flash(f"Se crearon {len(created_tasks)} acciones independientes, una por cada fecha asignada.", "success")
+        else:
+            flash("Acción creada correctamente.", "success")
     except Exception as exc:
         app.logger.exception("Error al crear acción")
         flash(f"Error al crear acción: {exc}", "error")
@@ -1040,8 +1151,11 @@ def editar(task_id):
         return redirect(url_for("index"))
     if request.method == "POST":
         try:
-            update_task_from_form(task_id, request.form)
-            flash("Acción actualizada correctamente.", "success")
+            _, created_extra_tasks = update_task_from_form(task_id, request.form)
+            if created_extra_tasks:
+                flash(f"Acción actualizada. Además se generaron {len(created_extra_tasks)} acción(es) independiente(s) para las fechas adicionales.", "success")
+            else:
+                flash("Acción actualizada correctamente.", "success")
             return redirect(url_for("index"))
         except Exception as exc:
             app.logger.exception("Error al actualizar acción")
@@ -1204,6 +1318,7 @@ def health():
 
 
 init_db()
+split_existing_multidate_tasks()
 
 if __name__ == "__main__":
     app.run(debug=True)

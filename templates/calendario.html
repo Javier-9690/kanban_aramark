@@ -3,7 +3,7 @@
 <section class="hero calendar-hero">
   <div>
     <h1>Gran calendario de acciones</h1>
-    <p>Vista mensual de acciones no finalizadas. Cada fecha asignada a una acción se muestra como una ocurrencia independiente.</p>
+    <p>Vista mensual de acciones no finalizadas. Cada fecha corresponde a una tarjeta/acción independiente.</p>
   </div>
   <div class="hero-actions">
     <a class="btn secondary" href="{{ url_for('calendario', month=calendar_view.prev_month, q=filters.q, area=filters.area, priority=filters.priority, assignee=filters.assignee) }}">← Mes anterior</a>
@@ -65,6 +65,6 @@
 </section>
 
 <section class="calendar-note">
-  <strong>Uso operativo:</strong> al crear o editar una acción puedes agregar varias fechas. Si la acción no está finalizada, aparecerá en cada día asignado del calendario.
+  <strong>Uso operativo:</strong> al crear o editar una acción puedes agregar varias fechas. El sistema generará acciones independientes para cada día, de modo que cada fecha se pueda gestionar por separado.
 </section>
 {% endblock %}
