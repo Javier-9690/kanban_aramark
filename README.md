@@ -49,3 +49,14 @@ BREVO_TIMEOUT=8
 ## Regla de multifechas
 
 Cuando una acción se crea o edita con varias fechas, la aplicación genera una tarjeta/acción independiente por cada día. Esto evita que una modificación aplicada a una fecha afecte a las demás. Al iniciar, la app también separa automáticamente las acciones antiguas que todavía tengan múltiples fechas registradas.
+
+
+## Importante en Render
+
+Start Command recomendado:
+
+```bash
+gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120 --access-logfile - --error-logfile -
+```
+
+Si Render muestra `No open HTTP ports detected on 0.0.0.0`, revisar que el servicio no tenga un Start Command antiguo como `gunicorn app:app` o `python app.py`.
