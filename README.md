@@ -5,6 +5,8 @@ Aplicación Flask lista para Render con:
 - Tablero Kanban operacional.
 - PostgreSQL por `DATABASE_URL`.
 - Dashboard de acciones urgentes con rango máximo de 7 días.
+- Gran calendario mensual de acciones no finalizadas.
+- Asignación de una misma acción a varias fechas.
 - Múltiples responsables por acción.
 - Responsables con correo.
 - Notificaciones por correo mediante Brevo API.
@@ -32,8 +34,10 @@ BREVO_TIMEOUT=8
 2. Crea responsables con nombre y correo.
 3. Marca `Notificar por correo` si quieres que ese responsable reciba avisos automáticos.
 4. Crea una acción y asigna uno o varios responsables.
-5. Al crear, editar o mover la acción de columna, el sistema notifica por correo a todos los responsables asignados con notificación activa.
-6. Revisa resultados en **Notificaciones**.
+5. Agrega una o varias fechas de ejecución/vencimiento para la misma acción.
+6. Entra a **Calendario** para ver cada ocurrencia pendiente por día.
+7. Al crear, editar o mover la acción de columna, el sistema notifica por correo a todos los responsables asignados con notificación activa.
+8. Revisa resultados en **Notificaciones**.
 
 ## Despliegue Render
 

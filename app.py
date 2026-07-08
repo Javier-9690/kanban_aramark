@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import calendar
 import csv
 import html as html_lib
 import io
@@ -31,6 +32,8 @@ STATUS_KEYS = [s[0] for s in STATUSES]
 PRIORITIES = ["Alta", "Media", "Baja"]
 PRIORITY_RANK = {"Alta": 0, "Media": 1, "Baja": 2}
 AREAS = ["Calidad", "Hotelería", "Food", "Facility", "Prevención de riesgos", "RRHH", "Gerencia"]
+MONTH_NAMES = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+DAY_NAMES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "cambiar-esta-clave-en-render")
@@ -201,6 +204,15 @@ def init_db():
             )
             """,
             """
+            CREATE TABLE IF NOT EXISTS task_dates (
+                id SERIAL PRIMARY KEY,
+                task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                action_date TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (task_id, action_date)
+            )
+            """,
+            """
             CREATE TABLE IF NOT EXISTS notification_logs (
                 id SERIAL PRIMARY KEY,
                 channel TEXT NOT NULL,
@@ -217,6 +229,8 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)",
             "CREATE INDEX IF NOT EXISTS idx_resp_name ON responsables(name)",
             "CREATE INDEX IF NOT EXISTS idx_task_resp_task ON task_responsibles(task_id)",
+            "CREATE INDEX IF NOT EXISTS idx_task_dates_task ON task_dates(task_id)",
+            "CREATE INDEX IF NOT EXISTS idx_task_dates_date ON task_dates(action_date)",
             "CREATE INDEX IF NOT EXISTS idx_notify_logs_task ON notification_logs(task_id)",
         ])
         return
@@ -259,6 +273,15 @@ def init_db():
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS task_dates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            action_date TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (task_id, action_date)
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS notification_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             channel TEXT NOT NULL,
@@ -275,6 +298,8 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)",
         "CREATE INDEX IF NOT EXISTS idx_resp_name ON responsables(name)",
         "CREATE INDEX IF NOT EXISTS idx_task_resp_task ON task_responsibles(task_id)",
+        "CREATE INDEX IF NOT EXISTS idx_task_dates_task ON task_dates(task_id)",
+        "CREATE INDEX IF NOT EXISTS idx_task_dates_date ON task_dates(action_date)",
         "CREATE INDEX IF NOT EXISTS idx_notify_logs_task ON notification_logs(task_id)",
     ])
     sqlite_add_column_if_missing("tasks", "assignee_email", "TEXT")
@@ -418,15 +443,94 @@ def assign_responsibles(task_id, responsible_ids):
     return ids
 
 
+def normalize_date_value(value):
+    value = (str(value or "")).strip()
+    if not value:
+        return ""
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
+def date_list_from_form(form):
+    raw_values = []
+    if hasattr(form, "getlist"):
+        raw_values.extend(form.getlist("task_dates"))
+    fallback = (form.get("due_date") or "").strip() if hasattr(form, "get") else ""
+    if fallback:
+        raw_values.append(fallback)
+    clean = []
+    for value in raw_values:
+        normalized = normalize_date_value(value)
+        if normalized and normalized not in clean:
+            clean.append(normalized)
+    return sorted(clean)
+
+
+def format_date_summary(dates):
+    dates = [d for d in (dates or []) if d]
+    if not dates:
+        return ""
+    if len(dates) <= 3:
+        return ", ".join(dates)
+    return ", ".join(dates[:3]) + f" +{len(dates) - 3} más"
+
+
+def get_task_dates(task_id):
+    rows = query_all("SELECT action_date FROM task_dates WHERE task_id = ? ORDER BY action_date", (task_id,))
+    dates = [normalize_date_value(row.get("action_date")) for row in rows]
+    dates = [d for d in dates if d]
+    if not dates:
+        row = query_one("SELECT due_date FROM tasks WHERE id = ?", (task_id,))
+        fallback = normalize_date_value(row.get("due_date") if row else "")
+        if fallback:
+            dates = [fallback]
+    return dates
+
+
+def set_task_dates(task_id, dates):
+    clean = []
+    for value in dates or []:
+        normalized = normalize_date_value(value)
+        if normalized and normalized not in clean:
+            clean.append(normalized)
+    clean = sorted(clean)
+    execute_write("DELETE FROM task_dates WHERE task_id = ?", (task_id,))
+    for action_date in clean:
+        execute_write(
+            "INSERT INTO task_dates (task_id, action_date, created_at) VALUES (?, ?, ?)",
+            (task_id, action_date, now_text()),
+        )
+    execute_write("UPDATE tasks SET due_date = ? WHERE id = ?", (clean[0] if clean else "", task_id))
+    return clean
+
+
+def due_dates_for_task(task):
+    dates = task.get("task_dates") or []
+    if not dates and task.get("due_date"):
+        dates = [task.get("due_date")]
+    return [d for d in dates if normalize_date_value(d)]
+
+
 def row_to_dict(row):
     item = dict(row)
     item["status_label"] = STATUS_LABELS.get(item.get("status"), item.get("status"))
     item["is_overdue"] = False
     item["days_until_due"] = None
-    due = parse_due_date(item.get("due_date"))
-    if due:
-        item["days_until_due"] = (due - date.today()).days
-        item["is_overdue"] = item.get("status") != "finalizado" and due < date.today()
+    task_dates = get_task_dates(item.get("id")) if item.get("id") else []
+    item["task_dates"] = task_dates
+    item["date_summary"] = format_date_summary(task_dates)
+    if task_dates:
+        item["due_date"] = task_dates[0]
+    parsed_dates = [parse_due_date(d) for d in task_dates]
+    parsed_dates = [d for d in parsed_dates if d]
+    if parsed_dates:
+        today = date.today()
+        day_values = [(d - today).days for d in parsed_dates]
+        item["is_overdue"] = item.get("status") != "finalizado" and any(d < today for d in parsed_dates)
+        future_days = [days for days in day_values if days >= 0]
+        item["days_until_due"] = min(future_days) if future_days else min(day_values)
     responsibles = get_task_responsibles(item.get("id")) if item.get("id") else []
     item["responsibles"] = responsibles
     item["responsible_ids"] = [str(r["id"]) for r in responsibles]
@@ -483,6 +587,16 @@ def metrics_from_tasks(tasks):
     return {"total": total, "finalizados": finalizados, "bloqueados": bloqueados, "vencidos": vencidos, "avance": avance}
 
 
+def urgency_for_days(days):
+    if days < 0:
+        return "Vencida", "danger"
+    if days == 0:
+        return "Vence hoy", "danger"
+    if days <= 3:
+        return f"Vence en {days} día{'s' if days != 1 else ''}", "warning"
+    return f"Vence en {days} días", "normal"
+
+
 def urgent_dashboard_from_tasks(tasks, window_days=7):
     today = date.today()
     end_date = today + timedelta(days=window_days)
@@ -490,25 +604,16 @@ def urgent_dashboard_from_tasks(tasks, window_days=7):
     for task in tasks:
         if task.get("status") == "finalizado":
             continue
-        due = parse_due_date(task.get("due_date"))
-        if not due:
-            continue
-        if due <= end_date:
+        for dstr in due_dates_for_task(task):
+            due = parse_due_date(dstr)
+            if not due or due > end_date:
+                continue
             days = (due - today).days
             item = dict(task)
+            item["due_date"] = dstr
+            item["calendar_date"] = dstr
             item["days_until_due"] = days
-            if days < 0:
-                item["urgency_label"] = "Vencida"
-                item["urgency_class"] = "danger"
-            elif days == 0:
-                item["urgency_label"] = "Vence hoy"
-                item["urgency_class"] = "danger"
-            elif days <= 3:
-                item["urgency_label"] = f"Vence en {days} día{'s' if days != 1 else ''}"
-                item["urgency_class"] = "warning"
-            else:
-                item["urgency_label"] = f"Vence en {days} días"
-                item["urgency_class"] = "normal"
+            item["urgency_label"], item["urgency_class"] = urgency_for_days(days)
             urgent.append(item)
 
     urgent.sort(key=lambda t: (
@@ -532,6 +637,67 @@ def urgent_dashboard_from_tasks(tasks, window_days=7):
     }
 
 
+def parse_month_param(value):
+    today = date.today()
+    if value:
+        try:
+            parsed = datetime.strptime(value, "%Y-%m").date()
+            return parsed.year, parsed.month
+        except ValueError:
+            pass
+    return today.year, today.month
+
+
+def month_shift(year, month, delta):
+    current = date(year, month, 1)
+    month_index = current.month - 1 + delta
+    new_year = current.year + month_index // 12
+    new_month = month_index % 12 + 1
+    return date(new_year, new_month, 1)
+
+
+def build_calendar_context(tasks, year, month):
+    cal = calendar.Calendar(firstweekday=0)
+    weeks = cal.monthdatescalendar(year, month)
+    start_date = weeks[0][0]
+    end_date = weeks[-1][-1]
+    today = date.today()
+    entries_by_date = {day.strftime("%Y-%m-%d"): [] for week in weeks for day in week}
+    for task in tasks:
+        if task.get("status") == "finalizado":
+            continue
+        for dstr in due_dates_for_task(task):
+            due = parse_due_date(dstr)
+            if not due or due < start_date or due > end_date:
+                continue
+            days = (due - today).days
+            item = dict(task)
+            item["calendar_date"] = dstr
+            item["days_until_due"] = days
+            item["urgency_label"], item["urgency_class"] = urgency_for_days(days)
+            entries_by_date.setdefault(dstr, []).append(item)
+    for items in entries_by_date.values():
+        items.sort(key=lambda t: (
+            0 if t.get("status") == "bloqueado" else 1,
+            PRIORITY_RANK.get(t.get("priority"), 9),
+            (t.get("area") or ""),
+            (t.get("title") or "").lower(),
+        ))
+    return {
+        "year": year,
+        "month": month,
+        "month_value": f"{year:04d}-{month:02d}",
+        "month_label": f"{MONTH_NAMES[month]} {year}",
+        "day_names": DAY_NAMES,
+        "weeks": weeks,
+        "entries_by_date": entries_by_date,
+        "today": today.strftime("%Y-%m-%d"),
+        "prev_month": month_shift(year, month, -1).strftime("%Y-%m"),
+        "next_month": month_shift(year, month, 1).strftime("%Y-%m"),
+        "pending_count": sum(len(items) for items in entries_by_date.values()),
+    }
+
+
 def get_task(task_id):
     row = query_one("SELECT * FROM tasks WHERE id = ?", (task_id,))
     return row_to_dict(row) if row else None
@@ -551,7 +717,7 @@ def compose_notification_text(task, intro, changes=None):
         f"Prioridad: {task.get('priority') or ''}",
         f"Responsables: {task.get('responsible_names') or task.get('assignee') or 'Sin responsable'}",
         f"Área: {task.get('area') or 'Sin área'}",
-        f"Fecha límite: {task.get('due_date') or 'Sin fecha'}",
+        f"Fechas asignadas: {task.get('date_summary') or format_date_summary(due_dates_for_task(task)) or 'Sin fecha'}",
     ]
     if changes:
         lines.extend(["", "Cambios registrados:"])
@@ -582,7 +748,7 @@ def compose_task_email(task, intro, changes=None):
             <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Prioridad</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('priority'))}</td></tr>
             <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Responsables</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('responsible_names') or task.get('assignee'))}</td></tr>
             <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Área</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('area'))}</td></tr>
-            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Fecha límite</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('due_date') or 'Sin fecha')}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Fechas asignadas</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('date_summary') or format_date_summary(due_dates_for_task(task)) or 'Sin fecha')}</td></tr>
           </table>
           {change_html}
           {button_html}
@@ -694,13 +860,15 @@ def task_record_from_form(form, current_status="pendiente"):
     title = (form.get("title") or "").strip()
     if not title:
         raise ValueError("El título de la tarea es obligatorio.")
+    task_dates = date_list_from_form(form)
     return {
         "title": title,
         "description": (form.get("description") or "").strip(),
         "status": normalize_status(form.get("status") or current_status),
         "priority": normalize_priority(form.get("priority") or "Media"),
         "area": (form.get("area") or "").strip(),
-        "due_date": (form.get("due_date") or "").strip(),
+        "due_date": task_dates[0] if task_dates else "",
+        "task_dates": task_dates,
     }
 
 
@@ -727,6 +895,7 @@ def create_task_from_form(form):
     record.update({"position": next_position(record["status"]), "created_at": now_text(), "updated_at": now_text()})
     task_id = insert_task_record(record)
     assign_responsibles(task_id, form.getlist("responsible_ids"))
+    set_task_dates(task_id, record.get("task_dates", []))
     task = get_task(task_id)
     notify_task(
         task,
@@ -739,7 +908,7 @@ def create_task_from_form(form):
 
 
 def changes_between(old, new, old_resps=None, new_resps=None):
-    labels = {"title": "Título", "description": "Descripción", "status": "Estado", "priority": "Prioridad", "area": "Área", "due_date": "Fecha límite"}
+    labels = {"title": "Título", "description": "Descripción", "status": "Estado", "priority": "Prioridad", "area": "Área"}
     changes = []
     for key, label in labels.items():
         old_value = old.get(key) or ""
@@ -749,6 +918,10 @@ def changes_between(old, new, old_resps=None, new_resps=None):
             new_value = STATUS_LABELS.get(new_value, new_value)
         if old_value != new_value:
             changes.append(f"{label}: {old_value or 'Sin dato'} → {new_value or 'Sin dato'}")
+    old_dates = format_date_summary(due_dates_for_task(old))
+    new_dates = format_date_summary(due_dates_for_task(new))
+    if old_dates != new_dates:
+        changes.append(f"Fechas: {old_dates or 'Sin fecha'} → {new_dates or 'Sin fecha'}")
     old_names = ", ".join([r.get("name") or "" for r in (old_resps or []) if r.get("name")])
     new_names = ", ".join([r.get("name") or "" for r in (new_resps or []) if r.get("name")])
     if old_names != new_names:
@@ -772,6 +945,7 @@ def update_task_from_form(task_id, form):
         (record["title"], record["description"], record["status"], record["priority"], record["area"], record["due_date"], record["updated_at"], task_id),
     )
     assign_responsibles(task_id, form.getlist("responsible_ids"))
+    set_task_dates(task_id, record.get("task_dates", []))
     new_task = get_task(task_id)
     new_resps = get_task_responsibles(task_id)
     changes = changes_between(old_task, new_task, old_resps, new_resps)
@@ -803,6 +977,8 @@ def inject_globals():
         "AREAS": AREAS,
         "STATUS_LABELS": STATUS_LABELS,
         "EMAIL_ENABLED": email_enabled(),
+        "MONTH_NAMES": MONTH_NAMES,
+        "DAY_NAMES": DAY_NAMES,
     }
 
 
@@ -821,6 +997,26 @@ def index():
         metrics=metrics,
         filters=filters,
         urgent_dashboard=urgent_dashboard,
+        responsibles=active_responsibles(),
+    )
+
+
+@app.route("/calendario")
+def calendario():
+    filters = {
+        "q": request.args.get("q", ""),
+        "area": request.args.get("area", ""),
+        "priority": request.args.get("priority", ""),
+        "assignee": request.args.get("assignee", ""),
+    }
+    year, month = parse_month_param(request.args.get("month"))
+    tasks = load_tasks(filters)
+    calendar_view = build_calendar_context(tasks, year, month)
+    return render_template(
+        "calendario.html",
+        title=f"Calendario - {APP_TITLE}",
+        filters=filters,
+        calendar_view=calendar_view,
         responsibles=active_responsibles(),
     )
 
@@ -857,6 +1053,7 @@ def editar(task_id):
 @app.route("/eliminar/<int:task_id>", methods=["POST"])
 def eliminar(task_id):
     execute_write("DELETE FROM task_responsibles WHERE task_id = ?", (task_id,))
+    execute_write("DELETE FROM task_dates WHERE task_id = ?", (task_id,))
     execute_write("DELETE FROM tasks WHERE id = ?", (task_id,))
     flash("Acción eliminada.", "success")
     return redirect(url_for("index"))
@@ -975,7 +1172,7 @@ def notificaciones():
 def exportar_csv():
     tasks = load_tasks()
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["id", "title", "description", "status", "priority", "responsables", "correos", "area", "due_date", "created_at", "updated_at"])
+    writer = csv.DictWriter(output, fieldnames=["id", "title", "description", "status", "priority", "responsables", "correos", "area", "fechas", "due_date", "created_at", "updated_at"])
     writer.writeheader()
     for task in tasks:
         writer.writerow({
@@ -987,6 +1184,7 @@ def exportar_csv():
             "responsables": task.get("responsible_names", ""),
             "correos": task.get("responsible_emails", ""),
             "area": task.get("area", ""),
+            "fechas": task.get("date_summary", ""),
             "due_date": task.get("due_date", ""),
             "created_at": task.get("created_at", ""),
             "updated_at": task.get("updated_at", ""),

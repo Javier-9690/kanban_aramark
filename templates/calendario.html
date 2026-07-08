@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero calendar-hero">
+  <div>
+    <h1>Gran calendario de acciones</h1>
+    <p>Vista mensual de acciones no finalizadas. Cada fecha asignada a una acción se muestra como una ocurrencia independiente.</p>
+  </div>
+  <div class="hero-actions">
+    <a class="btn secondary" href="{{ url_for('calendario', month=calendar_view.prev_month, q=filters.q, area=filters.area, priority=filters.priority, assignee=filters.assignee) }}">← Mes anterior</a>
+    <a class="btn" href="{{ url_for('index') }}">Volver al tablero</a>
+    <a class="btn secondary" href="{{ url_for('calendario', month=calendar_view.next_month, q=filters.q, area=filters.area, priority=filters.priority, assignee=filters.assignee) }}">Mes siguiente →</a>
+  </div>
+</section>
+
+<section class="calendar-toolbar">
+  <div class="calendar-title-block">
+    <span>Mes seleccionado</span>
+    <strong>{{ calendar_view.month_label }}</strong>
+    <small>{{ calendar_view.pending_count }} ocurrencia{{ 's' if calendar_view.pending_count != 1 else '' }} pendiente{{ 's' if calendar_view.pending_count != 1 else '' }} visible{{ 's' if calendar_view.pending_count != 1 else '' }}</small>
+  </div>
+  <form method="get" action="{{ url_for('calendario') }}" class="calendar-filter-form">
+    <input type="month" name="month" value="{{ calendar_view.month_value }}">
+    <input type="search" name="q" placeholder="Buscar acción" value="{{ filters.q }}">
+    <select name="area">
+      <option value="">Todas las áreas</option>
+      {% for area in AREAS %}<option value="{{ area }}" {% if filters.area == area %}selected{% endif %}>{{ area }}</option>{% endfor %}
+    </select>
+    <select name="priority">
+      <option value="">Todas las prioridades</option>
+      {% for pr in PRIORITIES %}<option value="{{ pr }}" {% if filters.priority == pr %}selected{% endif %}>{{ pr }}</option>{% endfor %}
+    </select>
+    <input type="search" name="assignee" placeholder="Responsable" value="{{ filters.assignee }}">
+    <button type="submit">Aplicar</button>
+    <a class="btn secondary" href="{{ url_for('calendario') }}">Limpiar</a>
+  </form>
+</section>
+
+<section class="calendar-board-large" aria-label="Calendario mensual de acciones pendientes">
+  <div class="calendar-weekdays">
+    {% for day_name in calendar_view.day_names %}<div>{{ day_name }}</div>{% endfor %}
+  </div>
+  <div class="calendar-grid-large">
+    {% for week in calendar_view.weeks %}
+      {% for day in week %}
+      {% set iso = day.strftime('%Y-%m-%d') %}
+      {% set items = calendar_view.entries_by_date.get(iso, []) %}
+      <article class="calendar-day {% if day.month != calendar_view.month %}muted-month{% endif %} {% if iso == calendar_view.today %}today{% endif %}">
+        <header>
+          <strong>{{ day.day }}</strong>
+          {% if items %}<span>{{ items|length }}</span>{% endif %}
+        </header>
+        <div class="calendar-items">
+          {% for task in items %}
+          <a class="calendar-task urgency-{{ task.urgency_class }} priority-{{ task.priority|lower }}" href="{{ url_for('editar', task_id=task.id) }}" title="Editar acción">
+            <span class="calendar-task-title">{{ task.title }}</span>
+            <small>{{ task.area or 'Sin área' }} · {{ task.responsible_names or 'Sin responsable' }}</small>
+            <em>{{ task.priority }} · {{ task.status_label }}</em>
+          </a>
+          {% endfor %}
+        </div>
+      </article>
+      {% endfor %}
+    {% endfor %}
+  </div>
+</section>
+
+<section class="calendar-note">
+  <strong>Uso operativo:</strong> al crear o editar una acción puedes agregar varias fechas. Si la acción no está finalizada, aparecerá en cada día asignado del calendario.
+</section>
+{% endblock %}

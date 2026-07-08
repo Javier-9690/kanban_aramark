@@ -33,7 +33,23 @@
       {% for area in AREAS %}<option value="{{ area }}" {% if task.area == area %}selected{% endif %}>{{ area }}</option>{% endfor %}
     </select>
   </label>
-  <label>Fecha límite
-    <input type="date" name="due_date" value="{{ task.due_date }}">
-  </label>
 </div>
+<label>Fechas de ejecución / vencimiento
+  <div class="date-manager" data-date-manager>
+    <div class="date-add-row">
+      <input type="date" data-date-input aria-label="Agregar fecha">
+      <button type="button" class="btn secondary" data-add-date>Agregar fecha</button>
+    </div>
+    <div class="date-chip-list" data-date-list>
+      {% set fechas = task.task_dates if task.task_dates is defined and task.task_dates else [] %}
+      {% for fecha in fechas %}
+      <span class="date-chip">
+        <input type="hidden" name="task_dates" value="{{ fecha }}">
+        <strong>{{ fecha }}</strong>
+        <button type="button" data-remove-date aria-label="Quitar fecha">×</button>
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+  <small>Puedes asignar la misma acción para varias fechas. El calendario mostrará cada fecha como una ocurrencia pendiente mientras la acción no esté finalizada.</small>
+</label>

@@ -3,10 +3,11 @@
 <section class="hero">
   <div>
     <h1>Tablero Kanban Operacional</h1>
-    <p>Gestión de acciones, múltiples responsables y notificaciones por correo.</p>
+    <p>Gestión de acciones, múltiples responsables, calendario mensual y notificaciones por correo.</p>
   </div>
   <div class="hero-actions">
     <button type="button" class="btn" data-open-modal="createModal">+ Nueva acción</button>
+    <a class="btn secondary" href="{{ url_for('calendario') }}">Gran calendario</a>
     <a class="btn secondary" href="{{ url_for('responsables') }}">Responsables</a>
     <a class="btn secondary" href="{{ url_for('exportar_csv') }}">Exportar CSV</a>
   </div>
@@ -16,7 +17,7 @@
   <div class="urgent-head">
     <div>
       <h2>Dashboard de acciones urgentes</h2>
-      <p>Rango máximo: desde hoy hasta los próximos {{ urgent_dashboard.window_days }} días. También se incluyen acciones vencidas no finalizadas.</p>
+      <p>Rango máximo: desde hoy hasta los próximos {{ urgent_dashboard.window_days }} días. Se muestran ocurrencias no finalizadas, incluidas fechas vencidas.</p>
     </div>
     <div class="urgent-range">
       <span>{{ urgent_dashboard.today }}</span>
@@ -27,7 +28,7 @@
   <div class="urgent-metrics">
     <article><span>Vencidas</span><strong>{{ urgent_dashboard.overdue }}</strong></article>
     <article><span>Vencen hoy</span><strong>{{ urgent_dashboard.due_today }}</strong></article>
-    <article><span>Próximos 7 días</span><strong>{{ urgent_dashboard.due_week }}</strong></article>
+    <article><span>Próximas fechas</span><strong>{{ urgent_dashboard.due_week }}</strong></article>
     <article><span>Alta prioridad</span><strong>{{ urgent_dashboard.high_priority }}</strong></article>
     <article><span>Bloqueadas</span><strong>{{ urgent_dashboard.blocked }}</strong></article>
   </div>
@@ -102,7 +103,7 @@
           {% if task.responsible_names %}<div><dt>Responsables</dt><dd>{{ task.responsible_names }}</dd></div>{% endif %}
           {% if task.responsible_emails %}<div><dt>Correos</dt><dd>{{ task.responsible_emails }}</dd></div>{% endif %}
           {% if task.area %}<div><dt>Área</dt><dd>{{ task.area }}</dd></div>{% endif %}
-          {% if task.due_date %}<div><dt>Fecha límite</dt><dd>{{ task.due_date }}</dd></div>{% endif %}
+          {% if task.date_summary %}<div><dt>Fechas</dt><dd>{{ task.date_summary }}</dd></div>{% endif %}
         </dl>
         <div class="task-actions">
           <a class="ghost action-link" href="{{ url_for('editar', task_id=task.id) }}">Editar</a>
@@ -121,7 +122,7 @@
   <div class="modal-panel modal-wide">
     <button type="button" class="modal-close" data-close-modal>&times;</button>
     <h2>Nueva acción</h2>
-    {% set task = {'title':'','description':'','status':'pendiente','priority':'Media','area':'','due_date':'','responsible_ids':[]} %}
+    {% set task = {'title':'','description':'','status':'pendiente','priority':'Media','area':'','due_date':'','task_dates':[],'responsible_ids':[]} %}
     <form method="post" action="{{ url_for('crear') }}" class="task-form">
       {% include "task_form_fields.html" %}
       <button type="submit">Crear acción</button>

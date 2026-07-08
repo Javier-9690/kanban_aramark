@@ -16,6 +16,51 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+
+  document.querySelectorAll('[data-date-manager]').forEach(manager => {
+    const input = manager.querySelector('[data-date-input]');
+    const addButton = manager.querySelector('[data-add-date]');
+    const list = manager.querySelector('[data-date-list]');
+
+    const currentDates = () => Array.from(list.querySelectorAll('input[name="task_dates"]')).map(el => el.value);
+
+    const addDate = (value) => {
+      const dateValue = (value || '').trim();
+      if (!dateValue) return;
+      if (currentDates().includes(dateValue)) {
+        if (input) input.value = '';
+        return;
+      }
+      const chip = document.createElement('span');
+      chip.className = 'date-chip';
+      chip.innerHTML = `<input type="hidden" name="task_dates" value="${dateValue}"><strong>${dateValue}</strong><button type="button" data-remove-date aria-label="Quitar fecha">×</button>`;
+      list.appendChild(chip);
+      const chips = Array.from(list.querySelectorAll('.date-chip'));
+      chips.sort((a, b) => a.querySelector('input').value.localeCompare(b.querySelector('input').value));
+      chips.forEach(item => list.appendChild(item));
+      if (input) input.value = '';
+    };
+
+    if (addButton) {
+      addButton.addEventListener('click', event => {
+        event.preventDefault();
+        addDate(input?.value || '');
+      });
+    }
+    if (input) {
+      input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          addDate(input.value);
+        }
+      });
+    }
+    list.addEventListener('click', event => {
+      const btn = event.target.closest('[data-remove-date]');
+      if (btn) btn.closest('.date-chip')?.remove();
+    });
+  });
+
   document.querySelectorAll('.task-actions button, .task-actions a, input, select, textarea').forEach(el => {
     el.addEventListener('mousedown', event => event.stopPropagation());
     el.addEventListener('dragstart', event => event.preventDefault());
