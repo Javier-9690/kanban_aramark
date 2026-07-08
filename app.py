@@ -513,7 +513,100 @@ def due_dates_for_task(task):
     return [d for d in dates if normalize_date_value(d)]
 
 
+def load_task_dates_map(task_ids):
+    """Carga fechas de muchas acciones en una sola consulta.
+
+    Esto evita el problema de rendimiento por consultas repetidas a PostgreSQL
+    cuando el tablero tiene muchas tarjetas.
+    """
+    ids = [int(x) for x in (task_ids or []) if str(x).isdigit()]
+    if not ids:
+        return {}
+    placeholders = ",".join(["?"] * len(ids))
+    rows = query_all(
+        f"SELECT task_id, action_date FROM task_dates WHERE task_id IN ({placeholders}) ORDER BY action_date",
+        ids,
+    )
+    dates_map = {task_id: [] for task_id in ids}
+    for row in rows:
+        tid = int(row.get("task_id"))
+        d = normalize_date_value(row.get("action_date"))
+        if d and d not in dates_map.setdefault(tid, []):
+            dates_map[tid].append(d)
+    return dates_map
+
+
+def load_responsibles_map(task_ids):
+    """Carga responsables de muchas acciones en una sola consulta."""
+    ids = [int(x) for x in (task_ids or []) if str(x).isdigit()]
+    if not ids:
+        return {}
+    placeholders = ",".join(["?"] * len(ids))
+    rows = query_all(
+        f"""
+        SELECT tr.task_id, r.*
+        FROM task_responsibles tr
+        JOIN responsables r ON tr.responsible_id = r.id
+        WHERE tr.task_id IN ({placeholders})
+        ORDER BY tr.task_id, r.name
+        """,
+        ids,
+    )
+    resp_map = {task_id: [] for task_id in ids}
+    for row in rows:
+        tid = int(row.get("task_id"))
+        responsible = dict(row)
+        responsible.pop("task_id", None)
+        responsible["notify_email"] = db_bool(responsible.get("notify_email"))
+        responsible["active"] = db_bool(responsible.get("active"))
+        resp_map.setdefault(tid, []).append(responsible)
+    return resp_map
+
+
+def decorate_task_rows(rows):
+    """Agrega fechas, responsables y métricas de vencimiento sin consultas N+1."""
+    task_ids = [int(row.get("id")) for row in rows if row.get("id") is not None]
+    dates_map = load_task_dates_map(task_ids)
+    resp_map = load_responsibles_map(task_ids)
+    today = date.today()
+    decorated = []
+
+    for row in rows:
+        item = dict(row)
+        task_id = int(item.get("id")) if item.get("id") is not None else None
+        item["status_label"] = STATUS_LABELS.get(item.get("status"), item.get("status"))
+        item["is_overdue"] = False
+        item["days_until_due"] = None
+
+        task_dates = dates_map.get(task_id, []) if task_id is not None else []
+        if not task_dates:
+            fallback = normalize_date_value(item.get("due_date"))
+            if fallback:
+                task_dates = [fallback]
+        item["task_dates"] = task_dates
+        item["date_summary"] = format_date_summary(task_dates)
+        if task_dates:
+            item["due_date"] = task_dates[0]
+
+        parsed_dates = [parse_due_date(d) for d in task_dates]
+        parsed_dates = [d for d in parsed_dates if d]
+        if parsed_dates:
+            day_values = [(d - today).days for d in parsed_dates]
+            item["is_overdue"] = item.get("status") != "finalizado" and any(d < today for d in parsed_dates)
+            future_days = [days for days in day_values if days >= 0]
+            item["days_until_due"] = min(future_days) if future_days else min(day_values)
+
+        responsibles = resp_map.get(task_id, []) if task_id is not None else []
+        item["responsibles"] = responsibles
+        item["responsible_ids"] = [str(r.get("id")) for r in responsibles if r.get("id") is not None]
+        item["responsible_names"] = ", ".join([r.get("name") or "" for r in responsibles if r.get("name")]) or item.get("assignee") or ""
+        item["responsible_emails"] = ", ".join([r.get("email") or "" for r in responsibles if r.get("email")]) or item.get("assignee_email") or ""
+        decorated.append(item)
+    return decorated
+
+
 def row_to_dict(row):
+    # Se mantiene para pantallas de edición/detalle de una sola acción.
     item = dict(row)
     item["status_label"] = STATUS_LABELS.get(item.get("status"), item.get("status"))
     item["is_overdue"] = False
@@ -568,7 +661,7 @@ def load_tasks(filters=None):
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY status, position, updated_at DESC"
     rows = query_all(sql, params)
-    return [row_to_dict(row) for row in rows]
+    return decorate_task_rows(rows)
 
 
 def board_from_tasks(tasks):
@@ -1318,7 +1411,8 @@ def health():
 
 
 init_db()
-split_existing_multidate_tasks()
+if env_bool("RUN_MULTIDATE_MIGRATION", default=False):
+    split_existing_multidate_tasks()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
