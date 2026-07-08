@@ -4,14 +4,11 @@ import html as html_lib
 import io
 import json
 import os
-import smtplib
-import socket
 import sqlite3
 import threading
 import urllib.error
 import urllib.request
 from datetime import datetime, date, timedelta
-from email.message import EmailMessage
 
 from flask import Flask, Response, flash, jsonify, redirect, render_template, request, url_for
 
@@ -47,22 +44,15 @@ def is_postgres():
     return DATABASE_URL.lower().startswith(("postgres://", "postgresql://"))
 
 
-def db_config_label():
-    if is_postgres():
-        return "PostgreSQL activo por DATABASE_URL"
-    return "SQLite local activo; configura DATABASE_URL para persistencia PostgreSQL"
-
-
 def get_conn():
     if is_postgres():
         try:
             import psycopg
             from psycopg.rows import dict_row
         except ImportError as exc:
-            raise RuntimeError(
-                "Falta instalar psycopg. Revisa requirements.txt y vuelve a desplegar en Render."
-            ) from exc
+            raise RuntimeError("Falta instalar psycopg. Revisa requirements.txt y vuelve a desplegar en Render.") from exc
         return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -106,20 +96,6 @@ def query_one(sql, params=()):
         conn.close()
 
 
-def execute_returning(sql, params=()):
-    conn = get_conn()
-    try:
-        if not is_postgres():
-            raise RuntimeError("execute_returning solo se usa con PostgreSQL.")
-        with conn.cursor() as cur:
-            cur.execute(adapt_sql(sql), tuple(params))
-            row = cur.fetchone()
-        conn.commit()
-        return row_as_dict(row)
-    finally:
-        conn.close()
-
-
 def execute_write(sql, params=()):
     conn = get_conn()
     try:
@@ -137,6 +113,22 @@ def execute_write(sql, params=()):
         conn.close()
 
 
+def execute_returning(sql, params=()):
+    conn = get_conn()
+    try:
+        if is_postgres():
+            with conn.cursor() as cur:
+                cur.execute(adapt_sql(sql), tuple(params))
+                row = cur.fetchone()
+            conn.commit()
+            return row_as_dict(row)
+        cur = conn.execute(sql, tuple(params))
+        conn.commit()
+        return {"id": cur.lastrowid}
+    finally:
+        conn.close()
+
+
 def execute_script(statements):
     conn = get_conn()
     try:
@@ -148,6 +140,19 @@ def execute_script(statements):
         else:
             for sql in statements:
                 conn.execute(sql)
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def sqlite_add_column_if_missing(table, column, definition):
+    if is_postgres():
+        return
+    conn = get_conn()
+    try:
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
             conn.commit()
     finally:
         conn.close()
@@ -173,44 +178,116 @@ def init_db():
             )
             """,
             "ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_email TEXT",
-            "CREATE INDEX IF NOT EXISTS idx_tasks_status_position ON tasks(status, position)",
-            "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)",
-            "CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)",
-            "CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)",
-        ])
-        return
-
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = get_conn()
-    try:
-        conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                description TEXT,
-                status TEXT NOT NULL DEFAULT 'pendiente',
-                priority TEXT NOT NULL DEFAULT 'Media',
-                assignee TEXT,
-                assignee_email TEXT,
+            CREATE TABLE IF NOT EXISTS responsables (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT,
+                whatsapp_phone TEXT,
                 area TEXT,
-                due_date TEXT,
-                position INTEGER NOT NULL DEFAULT 0,
+                notify_email BOOLEAN NOT NULL DEFAULT TRUE,
+                notify_whatsapp BOOLEAN NOT NULL DEFAULT FALSE,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
+            """,
+            "ALTER TABLE responsables ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT",
+            "ALTER TABLE responsables ADD COLUMN IF NOT EXISTS notify_email BOOLEAN NOT NULL DEFAULT TRUE",
+            "ALTER TABLE responsables ADD COLUMN IF NOT EXISTS notify_whatsapp BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE responsables ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE",
             """
+            CREATE TABLE IF NOT EXISTS task_responsibles (
+                task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                responsible_id INTEGER NOT NULL REFERENCES responsables(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (task_id, responsible_id)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS notification_logs (
+                id SERIAL PRIMARY KEY,
+                channel TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                task_id INTEGER,
+                responsible_id INTEGER,
+                recipient TEXT,
+                result TEXT NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_tasks_status_position ON tasks(status, position)",
+            "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)",
+            "CREATE INDEX IF NOT EXISTS idx_resp_name ON responsables(name)",
+            "CREATE INDEX IF NOT EXISTS idx_task_resp_task ON task_responsibles(task_id)",
+            "CREATE INDEX IF NOT EXISTS idx_notify_logs_task ON notification_logs(task_id)",
+        ])
+        return
+
+    execute_script([
+        """
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            description TEXT,
+            status TEXT NOT NULL DEFAULT 'pendiente',
+            priority TEXT NOT NULL DEFAULT 'Media',
+            assignee TEXT,
+            assignee_email TEXT,
+            area TEXT,
+            due_date TEXT,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
-        if "assignee_email" not in columns:
-            conn.execute("ALTER TABLE tasks ADD COLUMN assignee_email TEXT")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status_position ON tasks(status, position)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)")
-        conn.commit()
-    finally:
-        conn.close()
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS responsables (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT,
+            whatsapp_phone TEXT,
+            area TEXT,
+            notify_email INTEGER NOT NULL DEFAULT 1,
+            notify_whatsapp INTEGER NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS task_responsibles (
+            task_id INTEGER NOT NULL,
+            responsible_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (task_id, responsible_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS notification_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            task_id INTEGER,
+            responsible_id INTEGER,
+            recipient TEXT,
+            result TEXT NOT NULL,
+            detail TEXT,
+            created_at TEXT NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_tasks_status_position ON tasks(status, position)",
+        "CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date)",
+        "CREATE INDEX IF NOT EXISTS idx_resp_name ON responsables(name)",
+        "CREATE INDEX IF NOT EXISTS idx_task_resp_task ON task_responsibles(task_id)",
+        "CREATE INDEX IF NOT EXISTS idx_notify_logs_task ON notification_logs(task_id)",
+    ])
+    sqlite_add_column_if_missing("tasks", "assignee_email", "TEXT")
+    sqlite_add_column_if_missing("responsables", "whatsapp_phone", "TEXT")
+    sqlite_add_column_if_missing("responsables", "notify_email", "INTEGER NOT NULL DEFAULT 1")
+    sqlite_add_column_if_missing("responsables", "notify_whatsapp", "INTEGER NOT NULL DEFAULT 0")
+    sqlite_add_column_if_missing("responsables", "active", "INTEGER NOT NULL DEFAULT 1")
 
 
 def env_text(name, default=""):
@@ -224,8 +301,26 @@ def env_bool(name, default=False):
     return value in {"1", "true", "yes", "si", "sí", "on"}
 
 
+def bool_to_db(value):
+    if is_postgres():
+        return bool(value)
+    return 1 if value else 0
+
+
+def db_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).lower() in {"1", "true", "yes", "si", "sí", "on"}
+
+
 def notifications_active():
     return env_bool("NOTIFY_EMAIL", default=True)
+
+
+def whatsapp_notifications_active():
+    return env_bool("NOTIFY_WHATSAPP", default=False)
 
 
 def app_base_url():
@@ -240,253 +335,25 @@ def brevo_enabled():
     return bool(env_text("BREVO_API_KEY") and brevo_sender_email())
 
 
-def smtp_enabled():
-    required = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"]
-    return all(env_text(key) for key in required)
-
-
-def selected_email_provider():
-    if not notifications_active():
-        return "disabled"
-    preferred = env_text("EMAIL_PROVIDER", "auto").lower()
-    if preferred == "brevo":
-        return "brevo" if brevo_enabled() else "missing_brevo"
-    if preferred == "smtp":
-        return "smtp" if smtp_enabled() else "missing_smtp"
-    if brevo_enabled():
-        return "brevo"
-    if smtp_enabled():
-        return "smtp"
-    return "missing"
-
-
 def email_enabled():
-    return selected_email_provider() in {"brevo", "smtp"}
+    return notifications_active() and brevo_enabled()
 
 
-def email_config_label():
-    provider = selected_email_provider()
-    if provider == "brevo":
-        return "Activo por Brevo API HTTPS"
-    if provider == "smtp":
-        return "Activo por SMTP"
-    if provider == "disabled":
-        return "Desactivado por NOTIFY_EMAIL=false"
-    if provider == "missing_brevo":
-        return "Brevo seleccionado, pero faltan BREVO_API_KEY o BREVO_FROM_EMAIL"
-    if provider == "missing_smtp":
-        return "SMTP seleccionado, pero faltan variables SMTP"
-    return "No configurado"
+def whatsapp_enabled():
+    return whatsapp_notifications_active() and bool(env_text("BREVO_API_KEY") and env_text("BREVO_WHATSAPP_TEMPLATE_ID"))
 
 
-def create_ipv4_connection(host, port, timeout):
-    last_exc = None
-    addresses = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
-    if not addresses:
-        raise OSError(f"No se encontraron direcciones IPv4 para {host}:{port}")
-    for family, socktype, proto, _canonname, sockaddr in addresses:
-        sock = socket.socket(family, socktype, proto)
-        sock.settimeout(timeout)
-        try:
-            sock.connect(sockaddr)
-            return sock
-        except OSError as exc:
-            last_exc = exc
-            try:
-                sock.close()
-            except Exception:
-                pass
-    raise last_exc or OSError(f"No se pudo conectar por IPv4 a {host}:{port}")
-
-
-class SMTPIPv4(smtplib.SMTP):
-    def _get_socket(self, host, port, timeout):
-        return create_ipv4_connection(host, port, timeout)
-
-
-class SMTPSSLIPv4(smtplib.SMTP_SSL):
-    def _get_socket(self, host, port, timeout):
-        raw_socket = create_ipv4_connection(host, port, timeout)
-        return self.context.wrap_socket(raw_socket, server_hostname=self._host)
-
-
-def compose_task_email(task, intro, changes=None):
-    base_url = app_base_url()
-    task_url = f"{base_url}/editar/{task['id']}" if base_url and task.get("id") else ""
-    lines = [
-        intro,
-        "",
-        f"Tarea: {task.get('title') or ''}",
-        f"Estado: {STATUS_LABELS.get(task.get('status'), task.get('status') or '')}",
-        f"Prioridad: {task.get('priority') or ''}",
-        f"Responsable: {task.get('assignee') or ''}",
-        f"Área: {task.get('area') or ''}",
-        f"Fecha límite: {task.get('due_date') or 'Sin fecha'}",
-    ]
-    if changes:
-        lines.extend(["", "Cambios registrados:"])
-        lines.extend([f"- {item}" for item in changes])
-    if task_url:
-        lines.extend(["", f"Abrir tarea: {task_url}"])
-    lines.extend(["", "Kanban Operacional Aramark - Campamento 5400"])
-    text_content = "\n".join(lines)
-
-    esc = lambda value: html_lib.escape(str(value or ""))
-    change_html = ""
-    if changes:
-        change_html = "<h3>Cambios registrados</h3><ul>" + "".join(f"<li>{esc(item)}</li>" for item in changes) + "</ul>"
-    button_html = f'<p><a href="{esc(task_url)}" style="display:inline-block;background:#ed1b2e;color:#ffffff;padding:10px 14px;border-radius:5px;text-decoration:none;font-weight:bold;">Abrir tarea</a></p>' if task_url else ""
-    html_content = f"""
-    <html>
-      <body style="font-family:Arial,Helvetica,sans-serif;color:#303030;line-height:1.45;">
-        <div style="border-top:6px solid #ed1b2e;background:#ffffff;padding:18px;border:1px solid #eee;max-width:680px;">
-          <h2 style="margin-top:0;color:#202020;">Kanban Operacional Aramark</h2>
-          <p>{esc(intro)}</p>
-          <table style="border-collapse:collapse;width:100%;font-size:14px;">
-            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Tarea</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('title'))}</td></tr>
-            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Estado</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(STATUS_LABELS.get(task.get('status'), task.get('status') or ''))}</td></tr>
-            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Prioridad</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('priority'))}</td></tr>
-            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Responsable</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('assignee'))}</td></tr>
-            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Área</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('area'))}</td></tr>
-            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Fecha límite</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('due_date') or 'Sin fecha')}</td></tr>
-          </table>
-          {change_html}
-          {button_html}
-          <p style="font-size:12px;color:#777;margin-top:18px;">Campamento 5400 · Notificación automática.</p>
-        </div>
-      </body>
-    </html>
-    """
-    return text_content, html_content
-
-
-def send_brevo_email_sync(recipient, recipient_name, subject, text_content, html_content):
-    api_key = env_text("BREVO_API_KEY")
-    sender_email = brevo_sender_email()
-    sender_name = env_text("BREVO_FROM_NAME", "Kanban Operacional Aramark")
-    timeout = float(env_text("BREVO_TIMEOUT", "8"))
-    if not api_key or not sender_email:
-        return False, "Brevo no configurado. Falta BREVO_API_KEY o BREVO_FROM_EMAIL."
-
-    payload = {
-        "sender": {"name": sender_name, "email": sender_email},
-        "to": [{"email": recipient, "name": recipient_name or recipient}],
-        "subject": subject,
-        "htmlContent": html_content,
-        "textContent": text_content,
-    }
-    reply_to = env_text("BREVO_REPLY_TO")
-    if reply_to:
-        payload["replyTo"] = {"email": reply_to}
-
-    req = urllib.request.Request(
-        "https://api.brevo.com/v3/smtp/email",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "accept": "application/json",
-            "api-key": api_key,
-            "content-type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            body = response.read().decode("utf-8", "ignore")
-            if not (200 <= response.status < 300):
-                raise RuntimeError(f"Brevo respondió HTTP {response.status}: {body}")
-            app.logger.info("Correo enviado por Brevo a %s. Respuesta: %s", recipient, body[:500])
-            return True, "Correo enviado por Brevo."
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", "ignore")
-        app.logger.exception("Brevo rechazó el correo a %s. HTTP %s: %s", recipient, exc.code, body)
-        return False, f"Brevo HTTP {exc.code}: {body[:500]}"
-    except Exception as exc:
-        app.logger.exception("No se pudo enviar correo por Brevo a %s: %s", recipient, exc)
-        return False, str(exc)
-
-
-def send_smtp_email_sync(recipient, subject, text_content):
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = env_text("SMTP_FROM")
-    msg["To"] = recipient
-    msg.set_content(text_content)
-
-    host = env_text("SMTP_HOST")
-    port = int(env_text("SMTP_PORT", "587"))
-    timeout = float(env_text("SMTP_TIMEOUT", "4"))
-    user = env_text("SMTP_USER")
-    password = env_text("SMTP_PASSWORD")
-    use_ssl = env_bool("SMTP_SSL", default=False)
-    force_ipv4 = env_bool("SMTP_FORCE_IPV4", default=True)
-
-    try:
-        smtp_plain_cls = SMTPIPv4 if force_ipv4 else smtplib.SMTP
-        smtp_ssl_cls = SMTPSSLIPv4 if force_ipv4 else smtplib.SMTP_SSL
-        app.logger.info(
-            "Intentando correo SMTP host=%s port=%s ssl=%s ipv4=%s destino=%s",
-            host, port, use_ssl, force_ipv4, recipient,
-        )
-        if use_ssl:
-            with smtp_ssl_cls(host, port, timeout=timeout) as smtp:
-                smtp.login(user, password)
-                smtp.send_message(msg)
-        else:
-            with smtp_plain_cls(host, port, timeout=timeout) as smtp:
-                smtp.starttls()
-                smtp.login(user, password)
-                smtp.send_message(msg)
-        app.logger.info("Correo enviado por SMTP a %s", recipient)
-        return True, "Correo enviado por SMTP."
-    except Exception as exc:
-        app.logger.exception("No se pudo enviar correo por SMTP a %s: %s", recipient, exc)
-        return False, str(exc)
-
-
-def _send_task_email_sync(task, subject, intro, changes=None):
-    recipient = (task.get("assignee_email") or "").strip()
-    if not recipient:
-        return False, "La tarea no tiene correo de responsable."
-    if not email_enabled():
-        app.logger.warning("Correo no enviado: notificaciones no configuradas. Destinatario: %s", recipient)
-        return False, email_config_label()
-
-    text_content, html_content = compose_task_email(task, intro, changes)
-    provider = selected_email_provider()
-    if provider == "brevo":
-        return send_brevo_email_sync(recipient, task.get("assignee") or recipient, subject, text_content, html_content)
-    if provider == "smtp":
-        return send_smtp_email_sync(recipient, subject, text_content)
-    return False, email_config_label()
-
-
-def send_task_email(task, subject, intro, changes=None):
-    if not task:
-        return False, "Tarea no disponible."
-    recipient = (task.get("assignee_email") or "").strip()
-    if not recipient:
-        return False, "La tarea no tiene correo de responsable."
-    if not email_enabled():
-        app.logger.warning("Correo no programado: %s. Destinatario: %s", email_config_label(), recipient)
-        return False, email_config_label()
-
-    task_copy = dict(task)
-    changes_copy = list(changes or [])
-
-    def worker():
-        with app.app_context():
-            _send_task_email_sync(task_copy, subject, intro, changes_copy)
-
-    threading.Thread(target=worker, daemon=True).start()
-    return True, "Correo programado en segundo plano."
-
-
-def normalize_status(value):
-    return value if value in STATUS_KEYS else "pendiente"
-
-
-def normalize_priority(value):
-    return value if value in PRIORITIES else "Media"
+def normalize_phone(value):
+    raw = (value or "").strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if not raw:
+        return ""
+    if raw.startswith("+"):
+        return raw
+    if raw.startswith("56") and len(raw) >= 11:
+        return "+" + raw
+    if raw.startswith("9") and len(raw) == 9:
+        return "+56" + raw
+    return raw
 
 
 def parse_due_date(value):
@@ -498,9 +365,87 @@ def parse_due_date(value):
         return None
 
 
+def normalize_status(value):
+    return value if value in STATUS_KEYS else "pendiente"
+
+
+def normalize_priority(value):
+    return value if value in PRIORITIES else "Media"
+
+
 def next_position(status):
     row = query_one("SELECT COALESCE(MAX(position), 0) + 1 AS pos FROM tasks WHERE status = ?", (status,))
     return int(row.get("pos") or 1) if row else 1
+
+
+def active_responsibles():
+    rows = query_all("SELECT * FROM responsables WHERE active = ? ORDER BY name", (bool_to_db(True),))
+    for r in rows:
+        r["notify_email"] = db_bool(r.get("notify_email"))
+        r["notify_whatsapp"] = db_bool(r.get("notify_whatsapp"))
+        r["active"] = db_bool(r.get("active"))
+    return rows
+
+
+def all_responsibles():
+    rows = query_all("SELECT * FROM responsables ORDER BY active DESC, name")
+    for r in rows:
+        r["notify_email"] = db_bool(r.get("notify_email"))
+        r["notify_whatsapp"] = db_bool(r.get("notify_whatsapp"))
+        r["active"] = db_bool(r.get("active"))
+    return rows
+
+
+def get_responsible(responsible_id):
+    row = query_one("SELECT * FROM responsables WHERE id = ?", (responsible_id,))
+    if row:
+        row["notify_email"] = db_bool(row.get("notify_email"))
+        row["notify_whatsapp"] = db_bool(row.get("notify_whatsapp"))
+        row["active"] = db_bool(row.get("active"))
+    return row
+
+
+def get_task_responsibles(task_id):
+    rows = query_all(
+        """
+        SELECT r.* FROM responsables r
+        JOIN task_responsibles tr ON tr.responsible_id = r.id
+        WHERE tr.task_id = ?
+        ORDER BY r.name
+        """,
+        (task_id,),
+    )
+    for r in rows:
+        r["notify_email"] = db_bool(r.get("notify_email"))
+        r["notify_whatsapp"] = db_bool(r.get("notify_whatsapp"))
+        r["active"] = db_bool(r.get("active"))
+    return rows
+
+
+def refresh_task_legacy_fields(task_id):
+    responsibles = get_task_responsibles(task_id)
+    names = ", ".join([r.get("name") or "" for r in responsibles if r.get("name")])
+    emails = ", ".join([r.get("email") or "" for r in responsibles if r.get("email")])
+    execute_write("UPDATE tasks SET assignee = ?, assignee_email = ? WHERE id = ?", (names, emails, task_id))
+
+
+def assign_responsibles(task_id, responsible_ids):
+    ids = []
+    for value in responsible_ids or []:
+        try:
+            rid = int(value)
+            if rid not in ids:
+                ids.append(rid)
+        except (TypeError, ValueError):
+            continue
+    execute_write("DELETE FROM task_responsibles WHERE task_id = ?", (task_id,))
+    for rid in ids:
+        execute_write(
+            "INSERT INTO task_responsibles (task_id, responsible_id, created_at) VALUES (?, ?, ?)",
+            (task_id, rid, now_text()),
+        )
+    refresh_task_legacy_fields(task_id)
+    return ids
 
 
 def row_to_dict(row):
@@ -512,6 +457,12 @@ def row_to_dict(row):
     if due:
         item["days_until_due"] = (due - date.today()).days
         item["is_overdue"] = item.get("status") != "finalizado" and due < date.today()
+    responsibles = get_task_responsibles(item.get("id")) if item.get("id") else []
+    item["responsibles"] = responsibles
+    item["responsible_ids"] = [str(r["id"]) for r in responsibles]
+    item["responsible_names"] = ", ".join([r.get("name") or "" for r in responsibles if r.get("name")]) or item.get("assignee") or ""
+    item["responsible_emails"] = ", ".join([r.get("email") or "" for r in responsibles if r.get("email")]) or item.get("assignee_email") or ""
+    item["responsible_whatsapps"] = ", ".join([r.get("whatsapp_phone") or "" for r in responsibles if r.get("whatsapp_phone")])
     return item
 
 
@@ -543,7 +494,6 @@ def load_tasks(filters=None):
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY status, position, updated_at DESC"
-
     rows = query_all(sql, params)
     return [row_to_dict(row) for row in rows]
 
@@ -618,7 +568,256 @@ def get_task(task_id):
     return row_to_dict(row) if row else None
 
 
-def form_record(form, current_status="pendiente"):
+def task_url(task):
+    base_url = app_base_url()
+    return f"{base_url}/editar/{task['id']}" if base_url and task.get("id") else ""
+
+
+def compose_notification_text(task, intro, changes=None):
+    lines = [
+        intro,
+        "",
+        f"Tarea: {task.get('title') or ''}",
+        f"Estado: {STATUS_LABELS.get(task.get('status'), task.get('status') or '')}",
+        f"Prioridad: {task.get('priority') or ''}",
+        f"Responsables: {task.get('responsible_names') or task.get('assignee') or 'Sin responsable'}",
+        f"Área: {task.get('area') or 'Sin área'}",
+        f"Fecha límite: {task.get('due_date') or 'Sin fecha'}",
+    ]
+    if changes:
+        lines.extend(["", "Cambios registrados:"])
+        lines.extend([f"- {item}" for item in changes])
+    if task_url(task):
+        lines.extend(["", f"Abrir tarea: {task_url(task)}"])
+    lines.extend(["", "Kanban Operacional Aramark - Campamento 5400"])
+    return "\n".join(lines)
+
+
+def compose_task_email(task, intro, changes=None):
+    text_content = compose_notification_text(task, intro, changes)
+    esc = lambda value: html_lib.escape(str(value or ""))
+    change_html = ""
+    if changes:
+        change_html = "<h3>Cambios registrados</h3><ul>" + "".join(f"<li>{esc(item)}</li>" for item in changes) + "</ul>"
+    url = task_url(task)
+    button_html = f'<p><a href="{esc(url)}" style="display:inline-block;background:#ed1b2e;color:#ffffff;padding:10px 14px;border-radius:5px;text-decoration:none;font-weight:bold;">Abrir tarea</a></p>' if url else ""
+    html_content = f"""
+    <html>
+      <body style="font-family:Arial,Helvetica,sans-serif;color:#303030;line-height:1.45;">
+        <div style="border-top:6px solid #ed1b2e;background:#ffffff;padding:18px;border:1px solid #eee;max-width:680px;">
+          <h2 style="margin-top:0;color:#202020;">Kanban Operacional Aramark</h2>
+          <p>{esc(intro)}</p>
+          <table style="border-collapse:collapse;width:100%;font-size:14px;">
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Tarea</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('title'))}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Estado</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(STATUS_LABELS.get(task.get('status'), task.get('status') or ''))}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Prioridad</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('priority'))}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Responsables</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('responsible_names') or task.get('assignee'))}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Área</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('area'))}</td></tr>
+            <tr><td style="padding:7px;border-bottom:1px solid #eee;font-weight:bold;">Fecha límite</td><td style="padding:7px;border-bottom:1px solid #eee;">{esc(task.get('due_date') or 'Sin fecha')}</td></tr>
+          </table>
+          {change_html}
+          {button_html}
+          <p style="font-size:12px;color:#777;margin-top:18px;">Campamento 5400 · Notificación automática.</p>
+        </div>
+      </body>
+    </html>
+    """
+    return text_content, html_content
+
+
+def log_notification(channel, event_type, task_id, responsible_id, recipient, result, detail=""):
+    try:
+        execute_write(
+            """
+            INSERT INTO notification_logs (channel, event_type, task_id, responsible_id, recipient, result, detail, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (channel, event_type, task_id, responsible_id, recipient, result, detail[:1000] if detail else "", now_text()),
+        )
+    except Exception as exc:
+        app.logger.warning("No se pudo registrar log de notificación: %s", exc)
+
+
+def send_brevo_email_sync(recipient, recipient_name, subject, text_content, html_content, task_id=None, responsible_id=None, event_type="task"):
+    api_key = env_text("BREVO_API_KEY")
+    sender_email = brevo_sender_email()
+    sender_name = env_text("BREVO_FROM_NAME", "Kanban Operacional Aramark")
+    timeout = float(env_text("BREVO_TIMEOUT", "8"))
+    if not api_key or not sender_email:
+        log_notification("email", event_type, task_id, responsible_id, recipient, "error", "Falta BREVO_API_KEY o BREVO_FROM_EMAIL")
+        return False, "Brevo no configurado."
+    payload = {
+        "sender": {"name": sender_name, "email": sender_email},
+        "to": [{"email": recipient, "name": recipient_name or recipient}],
+        "subject": subject,
+        "htmlContent": html_content,
+        "textContent": text_content,
+    }
+    reply_to = env_text("BREVO_REPLY_TO")
+    if reply_to:
+        payload["replyTo"] = {"email": reply_to}
+    req = urllib.request.Request(
+        "https://api.brevo.com/v3/smtp/email",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"accept": "application/json", "api-key": api_key, "content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            body = response.read().decode("utf-8", "ignore")
+            if not (200 <= response.status < 300):
+                raise RuntimeError(f"Brevo respondió HTTP {response.status}: {body}")
+            log_notification("email", event_type, task_id, responsible_id, recipient, "enviado", body[:500])
+            app.logger.info("Correo enviado por Brevo a %s", recipient)
+            return True, "Correo enviado por Brevo."
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "ignore")
+        log_notification("email", event_type, task_id, responsible_id, recipient, "error", f"HTTP {exc.code}: {body[:800]}")
+        app.logger.exception("Brevo rechazó el correo a %s. HTTP %s: %s", recipient, exc.code, body)
+        return False, f"Brevo HTTP {exc.code}: {body[:500]}"
+    except Exception as exc:
+        log_notification("email", event_type, task_id, responsible_id, recipient, "error", str(exc))
+        app.logger.exception("No se pudo enviar correo por Brevo a %s: %s", recipient, exc)
+        return False, str(exc)
+
+
+def whatsapp_params(task, event_label, changes=None):
+    url = task_url(task)
+    changes_text = "; ".join(changes or [])[:450] if changes else "Sin cambios adicionales"
+    return {
+        "evento": event_label,
+        "tarea": task.get("title") or "Sin título",
+        "estado": STATUS_LABELS.get(task.get("status"), task.get("status") or ""),
+        "prioridad": task.get("priority") or "Media",
+        "area": task.get("area") or "Sin área",
+        "fecha_limite": task.get("due_date") or "Sin fecha",
+        "url": url or app_base_url() or "",
+        "cambios": changes_text,
+    }
+
+
+def build_brevo_whatsapp_payload(phone, task, event_label, changes=None):
+    template_id_raw = env_text("BREVO_WHATSAPP_TEMPLATE_ID")
+    if not template_id_raw:
+        raise RuntimeError("Falta BREVO_WHATSAPP_TEMPLATE_ID")
+    try:
+        template_id = int(template_id_raw)
+    except ValueError:
+        template_id = template_id_raw
+
+    params = whatsapp_params(task, event_label, changes)
+    # Brevo admite plantillas aprobadas. La API usa /v3/whatsapp/sendMessage.
+    # El cuerpo puede variar según la plantilla/SDK; esta estructura usa un modo directo habitual:
+    payload = {
+        "contactNumber": normalize_phone(phone),
+        "templateId": template_id,
+        "params": params,
+    }
+    sender_number = normalize_phone(env_text("BREVO_WHATSAPP_SENDER_NUMBER"))
+    if sender_number:
+        payload["senderNumber"] = sender_number
+    lang = env_text("BREVO_WHATSAPP_LANGUAGE")
+    if lang:
+        payload["language"] = lang
+    return payload
+
+
+def send_brevo_whatsapp_sync(phone, responsible_name, task, event_label, changes=None, responsible_id=None, event_type="task"):
+    api_key = env_text("BREVO_API_KEY")
+    timeout = float(env_text("BREVO_WHATSAPP_TIMEOUT", "8"))
+    phone = normalize_phone(phone)
+    if not api_key:
+        log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "error", "Falta BREVO_API_KEY")
+        return False, "Falta BREVO_API_KEY."
+    if not phone:
+        log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "error", "Teléfono vacío")
+        return False, "Teléfono vacío."
+
+    try:
+        payload = build_brevo_whatsapp_payload(phone, task, event_label, changes)
+    except Exception as exc:
+        log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "error", str(exc))
+        return False, str(exc)
+
+    endpoint = env_text("BREVO_WHATSAPP_ENDPOINT", "https://api.brevo.com/v3/whatsapp/sendMessage")
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"accept": "application/json", "api-key": api_key, "content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            body = response.read().decode("utf-8", "ignore")
+            if not (200 <= response.status < 300):
+                raise RuntimeError(f"Brevo WhatsApp respondió HTTP {response.status}: {body}")
+            log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "enviado", body[:500])
+            app.logger.info("WhatsApp enviado por Brevo a %s", phone)
+            return True, "WhatsApp enviado por Brevo."
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "ignore")
+        log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "error", f"HTTP {exc.code}: {body[:800]}")
+        app.logger.exception("Brevo rechazó WhatsApp a %s. HTTP %s: %s", phone, exc.code, body)
+        return False, f"Brevo WhatsApp HTTP {exc.code}: {body[:500]}"
+    except Exception as exc:
+        log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "error", str(exc))
+        app.logger.exception("No se pudo enviar WhatsApp por Brevo a %s: %s", phone, exc)
+        return False, str(exc)
+
+
+def notify_task(task, subject, intro, changes=None, event_type="task", event_label="Actualización de acción"):
+    if not task:
+        return
+    task_copy = dict(task)
+    responsibles = task_copy.get("responsibles") or get_task_responsibles(task_copy.get("id"))
+    changes_copy = list(changes or [])
+
+    def worker():
+        with app.app_context():
+            text_content, html_content = compose_task_email(task_copy, intro, changes_copy)
+            for responsible in responsibles:
+                rid = responsible.get("id")
+                if email_enabled() and db_bool(responsible.get("notify_email")) and responsible.get("email"):
+                    send_brevo_email_sync(
+                        responsible.get("email"),
+                        responsible.get("name"),
+                        subject,
+                        text_content,
+                        html_content,
+                        task_id=task_copy.get("id"),
+                        responsible_id=rid,
+                        event_type=event_type,
+                    )
+                if whatsapp_enabled() and db_bool(responsible.get("notify_whatsapp")) and responsible.get("whatsapp_phone"):
+                    send_brevo_whatsapp_sync(
+                        responsible.get("whatsapp_phone"),
+                        responsible.get("name"),
+                        task_copy,
+                        event_label,
+                        changes_copy,
+                        responsible_id=rid,
+                        event_type=event_type,
+                    )
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def responsible_record_from_form(form):
+    name = (form.get("name") or "").strip()
+    if not name:
+        raise ValueError("El nombre del responsable es obligatorio.")
+    return {
+        "name": name,
+        "email": (form.get("email") or "").strip(),
+        "whatsapp_phone": normalize_phone(form.get("whatsapp_phone") or ""),
+        "area": (form.get("area") or "").strip(),
+        "notify_email": bool_to_db(form.get("notify_email") == "on"),
+        "notify_whatsapp": bool_to_db(form.get("notify_whatsapp") == "on"),
+        "active": bool_to_db(form.get("active") == "on"),
+    }
+
+
+def task_record_from_form(form, current_status="pendiente"):
     title = (form.get("title") or "").strip()
     if not title:
         raise ValueError("El título de la tarea es obligatorio.")
@@ -627,74 +826,47 @@ def form_record(form, current_status="pendiente"):
         "description": (form.get("description") or "").strip(),
         "status": normalize_status(form.get("status") or current_status),
         "priority": normalize_priority(form.get("priority") or "Media"),
-        "assignee": (form.get("assignee") or "").strip(),
-        "assignee_email": (form.get("assignee_email") or "").strip(),
         "area": (form.get("area") or "").strip(),
         "due_date": (form.get("due_date") or "").strip(),
     }
 
 
 def insert_task_record(record):
-    values = (
-        record["title"], record["description"], record["status"], record["priority"],
-        record["assignee"], record["assignee_email"], record["area"], record["due_date"],
-        record["position"], record["created_at"], record["updated_at"],
+    row = execute_returning(
+        """
+        INSERT INTO tasks (title, description, status, priority, assignee, assignee_email, area, due_date, position, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
+        """ if is_postgres() else """
+        INSERT INTO tasks (title, description, status, priority, assignee, assignee_email, area, due_date, position, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record["title"], record["description"], record["status"], record["priority"],
+            "", "", record["area"], record["due_date"], record["position"], record["created_at"], record["updated_at"],
+        ),
     )
-    if is_postgres():
-        row = execute_returning(
-            """
-            INSERT INTO tasks (title, description, status, priority, assignee, assignee_email, area, due_date, position, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            RETURNING id
-            """,
-            values,
-        )
-        return int(row["id"])
-
-    conn = get_conn()
-    try:
-        cur = conn.execute(
-            """
-            INSERT INTO tasks (title, description, status, priority, assignee, assignee_email, area, due_date, position, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            values,
-        )
-        task_id = cur.lastrowid
-        conn.commit()
-        return int(task_id)
-    finally:
-        conn.close()
+    return int(row["id"])
 
 
 def create_task_from_form(form):
-    record = form_record(form)
-    record.update({
-        "position": next_position(record["status"]),
-        "created_at": now_text(),
-        "updated_at": now_text(),
-    })
+    record = task_record_from_form(form)
+    record.update({"position": next_position(record["status"]), "created_at": now_text(), "updated_at": now_text()})
     task_id = insert_task_record(record)
+    assign_responsibles(task_id, form.getlist("responsible_ids"))
     task = get_task(task_id)
-    send_task_email(
+    notify_task(
         task,
-        f"Nueva tarea asignada: {task['title']}",
-        "Se te ha asignado una nueva tarea en el Kanban Operacional Aramark.",
+        f"Nueva acción asignada: {task['title']}",
+        "Se creó una nueva acción en el Kanban Operacional Aramark.",
+        event_type="creacion",
+        event_label="Nueva acción creada",
     )
     return task
 
 
-def changes_between(old, new):
-    labels = {
-        "title": "Título",
-        "description": "Descripción",
-        "status": "Estado",
-        "priority": "Prioridad",
-        "assignee": "Responsable",
-        "assignee_email": "Correo responsable",
-        "area": "Área",
-        "due_date": "Fecha límite",
-    }
+def changes_between(old, new, old_resps=None, new_resps=None):
+    labels = {"title": "Título", "description": "Descripción", "status": "Estado", "priority": "Prioridad", "area": "Área", "due_date": "Fecha límite"}
     changes = []
     for key, label in labels.items():
         old_value = old.get(key) or ""
@@ -704,6 +876,10 @@ def changes_between(old, new):
             new_value = STATUS_LABELS.get(new_value, new_value)
         if old_value != new_value:
             changes.append(f"{label}: {old_value or 'Sin dato'} → {new_value or 'Sin dato'}")
+    old_names = ", ".join([r.get("name") or "" for r in (old_resps or []) if r.get("name")])
+    new_names = ", ".join([r.get("name") or "" for r in (new_resps or []) if r.get("name")])
+    if old_names != new_names:
+        changes.append(f"Responsables: {old_names or 'Sin responsable'} → {new_names or 'Sin responsable'}")
     return changes
 
 
@@ -711,36 +887,29 @@ def update_task_from_form(task_id, form):
     old_task = get_task(task_id)
     if old_task is None:
         raise ValueError("La tarea no existe.")
-    record = form_record(form, current_status=old_task.get("status") or "pendiente")
+    old_resps = get_task_responsibles(task_id)
+    record = task_record_from_form(form, current_status=old_task.get("status") or "pendiente")
     record["updated_at"] = now_text()
     execute_write(
         """
         UPDATE tasks
-        SET title = ?,
-            description = ?,
-            status = ?,
-            priority = ?,
-            assignee = ?,
-            assignee_email = ?,
-            area = ?,
-            due_date = ?,
-            updated_at = ?
+        SET title = ?, description = ?, status = ?, priority = ?, area = ?, due_date = ?, updated_at = ?
         WHERE id = ?
         """,
-        (
-            record["title"], record["description"], record["status"], record["priority"],
-            record["assignee"], record["assignee_email"], record["area"], record["due_date"],
-            record["updated_at"], task_id,
-        ),
+        (record["title"], record["description"], record["status"], record["priority"], record["area"], record["due_date"], record["updated_at"], task_id),
     )
+    assign_responsibles(task_id, form.getlist("responsible_ids"))
     new_task = get_task(task_id)
-    changes = changes_between(old_task, new_task)
+    new_resps = get_task_responsibles(task_id)
+    changes = changes_between(old_task, new_task, old_resps, new_resps)
     if changes:
-        send_task_email(
+        notify_task(
             new_task,
-            f"Actualización de tarea: {new_task['title']}",
-            "Una tarea asignada a tu nombre fue actualizada en el Kanban Operacional Aramark.",
+            f"Actualización de acción: {new_task['title']}",
+            "Una acción del Kanban Operacional Aramark fue actualizada.",
             changes,
+            event_type="actualizacion",
+            event_label="Acción actualizada",
         )
     return new_task
 
@@ -761,20 +930,13 @@ def inject_globals():
         "AREAS": AREAS,
         "STATUS_LABELS": STATUS_LABELS,
         "EMAIL_ENABLED": email_enabled(),
-        "EMAIL_CONFIG_LABEL": email_config_label(),
-        "DB_CONFIG_LABEL": db_config_label(),
-        "IS_POSTGRES": is_postgres(),
+        "WHATSAPP_ENABLED": whatsapp_enabled(),
     }
 
 
 @app.route("/")
 def index():
-    filters = {
-        "q": request.args.get("q", ""),
-        "area": request.args.get("area", ""),
-        "priority": request.args.get("priority", ""),
-        "assignee": request.args.get("assignee", ""),
-    }
+    filters = {"q": request.args.get("q", ""), "area": request.args.get("area", ""), "priority": request.args.get("priority", ""), "assignee": request.args.get("assignee", "")}
     all_tasks = load_tasks()
     filtered_tasks = load_tasks(filters)
     board = board_from_tasks(filtered_tasks)
@@ -787,6 +949,7 @@ def index():
         metrics=metrics,
         filters=filters,
         urgent_dashboard=urgent_dashboard,
+        responsibles=active_responsibles(),
     )
 
 
@@ -794,10 +957,10 @@ def index():
 def crear():
     try:
         create_task_from_form(request.form)
-        flash("Tarea creada correctamente.", "success")
+        flash("Acción creada correctamente.", "success")
     except Exception as exc:
-        app.logger.exception("Error al crear tarea")
-        flash(f"Error al crear tarea: {exc}", "error")
+        app.logger.exception("Error al crear acción")
+        flash(f"Error al crear acción: {exc}", "error")
     return redirect(url_for("index"))
 
 
@@ -805,24 +968,25 @@ def crear():
 def editar(task_id):
     task = get_task(task_id)
     if task is None:
-        flash("La tarea solicitada no existe.", "error")
+        flash("La acción solicitada no existe.", "error")
         return redirect(url_for("index"))
     if request.method == "POST":
         try:
             update_task_from_form(task_id, request.form)
-            flash("Tarea actualizada correctamente.", "success")
+            flash("Acción actualizada correctamente.", "success")
             return redirect(url_for("index"))
         except Exception as exc:
-            app.logger.exception("Error al actualizar tarea")
-            flash(f"Error al actualizar tarea: {exc}", "error")
+            app.logger.exception("Error al actualizar acción")
+            flash(f"Error al actualizar acción: {exc}", "error")
             task = {**task, **request.form}
-    return render_template("edit.html", title=f"Editar tarea - {APP_TITLE}", task=task)
+    return render_template("edit.html", title=f"Editar acción - {APP_TITLE}", task=task, responsibles=active_responsibles())
 
 
 @app.route("/eliminar/<int:task_id>", methods=["POST"])
 def eliminar(task_id):
+    execute_write("DELETE FROM task_responsibles WHERE task_id = ?", (task_id,))
     execute_write("DELETE FROM tasks WHERE id = ?", (task_id,))
-    flash("Tarea eliminada.", "success")
+    flash("Acción eliminada.", "success")
     return redirect(url_for("index"))
 
 
@@ -830,29 +994,24 @@ def move_task_to_status(task_id, status):
     try:
         task_id = int(task_id)
     except (TypeError, ValueError):
-        return jsonify({"ok": False, "error": "ID de tarea inválido."}), 400
-
+        return jsonify({"ok": False, "error": "ID de acción inválido."}), 400
     if status not in STATUS_KEYS:
         return jsonify({"ok": False, "error": "Estado inválido."}), 400
-
     old_task = get_task(task_id)
     if old_task is None:
-        return jsonify({"ok": False, "error": "La tarea no existe o ya fue eliminada. Recarga el tablero."}), 404
-
-    rowcount = execute_write(
-        "UPDATE tasks SET status = ?, position = ?, updated_at = ? WHERE id = ?",
-        (status, next_position(status), now_text(), task_id),
-    )
+        return jsonify({"ok": False, "error": "La acción no existe o ya fue eliminada. Recarga el tablero."}), 404
+    rowcount = execute_write("UPDATE tasks SET status = ?, position = ?, updated_at = ? WHERE id = ?", (status, next_position(status), now_text(), task_id))
     if rowcount == 0:
-        return jsonify({"ok": False, "error": "No se encontró la tarea al actualizar."}), 404
-
+        return jsonify({"ok": False, "error": "No se encontró la acción al actualizar."}), 404
     task = get_task(task_id)
     if task and old_task.get("status") != status:
-        send_task_email(
+        notify_task(
             task,
             f"Cambio de estado: {task['title']}",
-            "Una tarea asignada a tu nombre cambió de estado en el Kanban Operacional Aramark.",
+            "Una acción del Kanban Operacional Aramark cambió de estado.",
             [f"Estado: {STATUS_LABELS.get(old_task.get('status'), old_task.get('status'))} → {STATUS_LABELS.get(status, status)}"],
+            event_type="cambio_estado",
+            event_label="Cambio de estado",
         )
     return jsonify({"ok": True, "task_id": task_id, "status": status, "status_label": STATUS_LABELS[status]})
 
@@ -872,53 +1031,108 @@ def mover(task_id):
     return move_task_to_status(task_id, payload.get("status"))
 
 
+@app.route("/responsables", methods=["GET", "POST"])
+def responsables():
+    if request.method == "POST":
+        try:
+            record = responsible_record_from_form(request.form)
+            row = execute_returning(
+                """
+                INSERT INTO responsables (name, email, whatsapp_phone, area, notify_email, notify_whatsapp, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """ if is_postgres() else """
+                INSERT INTO responsables (name, email, whatsapp_phone, area, notify_email, notify_whatsapp, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (record["name"], record["email"], record["whatsapp_phone"], record["area"], record["notify_email"], record["notify_whatsapp"], record["active"], now_text(), now_text()),
+            )
+            flash("Responsable creado correctamente.", "success")
+        except Exception as exc:
+            app.logger.exception("Error al crear responsable")
+            flash(f"Error al crear responsable: {exc}", "error")
+        return redirect(url_for("responsables"))
+    return render_template("responsables.html", title=f"Responsables - {APP_TITLE}", responsibles=all_responsibles())
+
+
+@app.route("/responsables/<int:responsible_id>/editar", methods=["GET", "POST"])
+def editar_responsable(responsible_id):
+    responsible = get_responsible(responsible_id)
+    if responsible is None:
+        flash("El responsable no existe.", "error")
+        return redirect(url_for("responsables"))
+    if request.method == "POST":
+        try:
+            record = responsible_record_from_form(request.form)
+            execute_write(
+                """
+                UPDATE responsables
+                SET name = ?, email = ?, whatsapp_phone = ?, area = ?, notify_email = ?, notify_whatsapp = ?, active = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (record["name"], record["email"], record["whatsapp_phone"], record["area"], record["notify_email"], record["notify_whatsapp"], record["active"], now_text(), responsible_id),
+            )
+            for link in query_all("SELECT task_id FROM task_responsibles WHERE responsible_id = ?", (responsible_id,)):
+                refresh_task_legacy_fields(link["task_id"])
+            flash("Responsable actualizado correctamente.", "success")
+            return redirect(url_for("responsables"))
+        except Exception as exc:
+            app.logger.exception("Error al actualizar responsable")
+            flash(f"Error al actualizar responsable: {exc}", "error")
+    return render_template("responsable_edit.html", title=f"Editar responsable - {APP_TITLE}", responsible=responsible)
+
+
+@app.route("/responsables/<int:responsible_id>/eliminar", methods=["POST"])
+def eliminar_responsable(responsible_id):
+    affected = query_all("SELECT task_id FROM task_responsibles WHERE responsible_id = ?", (responsible_id,))
+    execute_write("DELETE FROM task_responsibles WHERE responsible_id = ?", (responsible_id,))
+    execute_write("DELETE FROM responsables WHERE id = ?", (responsible_id,))
+    for row in affected:
+        refresh_task_legacy_fields(row["task_id"])
+    flash("Responsable eliminado.", "success")
+    return redirect(url_for("responsables"))
+
+
+@app.route("/notificaciones")
+def notificaciones():
+    logs = query_all("SELECT * FROM notification_logs ORDER BY created_at DESC, id DESC LIMIT 100")
+    return render_template("notificaciones.html", title=f"Notificaciones - {APP_TITLE}", logs=logs)
+
+
 @app.route("/exportar/csv")
 def exportar_csv():
     tasks = load_tasks()
     output = io.StringIO()
-    writer = csv.DictWriter(
-        output,
-        fieldnames=["id", "title", "description", "status", "priority", "assignee", "assignee_email", "area", "due_date", "created_at", "updated_at"],
-    )
+    writer = csv.DictWriter(output, fieldnames=["id", "title", "description", "status", "priority", "responsables", "correos", "whatsapp", "area", "due_date", "created_at", "updated_at"])
     writer.writeheader()
     for task in tasks:
-        writer.writerow({key: task.get(key, "") for key in writer.fieldnames})
+        writer.writerow({
+            "id": task.get("id", ""),
+            "title": task.get("title", ""),
+            "description": task.get("description", ""),
+            "status": task.get("status", ""),
+            "priority": task.get("priority", ""),
+            "responsables": task.get("responsible_names", ""),
+            "correos": task.get("responsible_emails", ""),
+            "whatsapp": task.get("responsible_whatsapps", ""),
+            "area": task.get("area", ""),
+            "due_date": task.get("due_date", ""),
+            "created_at": task.get("created_at", ""),
+            "updated_at": task.get("updated_at", ""),
+        })
     content = output.getvalue().encode("utf-8-sig")
     return Response(content, content_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=kanban_aramark.csv"})
 
 
-@app.route("/notificaciones/probar", methods=["POST"])
-def probar_notificaciones():
-    test_email = (request.form.get("test_email") or "").strip()
-    if not test_email:
-        flash("Debes ingresar un correo para la prueba.", "error")
-        return redirect(url_for("index"))
-    fake_task = {
-        "id": 0,
-        "title": "Prueba de notificación",
-        "description": "Correo de prueba del Kanban Operacional Aramark.",
-        "status": "pendiente",
-        "priority": "Media",
-        "assignee": "Usuario de prueba",
-        "assignee_email": test_email,
-        "area": "Operaciones",
-        "due_date": "",
-    }
-    ok, message = _send_task_email_sync(
-        fake_task,
-        "Prueba de correo - Kanban Operacional Aramark",
-        "Este es un correo de prueba para verificar las notificaciones del Kanban Operacional Aramark.",
-    )
-    if ok:
-        flash(f"Correo de prueba enviado a {test_email}.", "success")
-    else:
-        flash(f"No se pudo enviar el correo de prueba: {message}", "error")
-    return redirect(url_for("index"))
-
-
 @app.route("/health")
 def health():
-    return {"status": "ok", "app": APP_TITLE, "database": "postgresql" if is_postgres() else "sqlite"}
+    return {
+        "status": "ok",
+        "app": APP_TITLE,
+        "database": "postgresql" if is_postgres() else "sqlite",
+        "email": email_enabled(),
+        "whatsapp": whatsapp_enabled(),
+    }
 
 
 init_db()

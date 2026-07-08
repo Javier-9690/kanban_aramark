@@ -28,7 +28,17 @@ services:
         value: Kanban Operacional Aramark
       - key: BREVO_TIMEOUT
         value: 8
-      # SMTP queda como respaldo opcional, pero Brevo es la opción recomendada en Render.
+      - key: NOTIFY_WHATSAPP
+        value: false
+      - key: BREVO_WHATSAPP_TEMPLATE_ID
+        sync: false
+      - key: BREVO_WHATSAPP_SENDER_NUMBER
+        sync: false
+      - key: BREVO_WHATSAPP_LANGUAGE
+        value: es
+      - key: BREVO_WHATSAPP_TIMEOUT
+        value: 8
+      # SMTP queda como respaldo opcional, pero Brevo API es la opción recomendada en Render.
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

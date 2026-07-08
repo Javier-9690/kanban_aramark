@@ -3,21 +3,20 @@
 <section class="hero">
   <div>
     <h1>Tablero Kanban Operacional</h1>
-    <p>Gestión de tareas, responsables, prioridades y acciones urgentes del servicio.</p>
+    <p>Gestión de acciones, múltiples responsables y notificaciones por correo y WhatsApp.</p>
   </div>
   <div class="hero-actions">
-    <button type="button" class="btn" data-open-modal="createModal">+ Nueva tarea</button>
+    <button type="button" class="btn" data-open-modal="createModal">+ Nueva acción</button>
+    <a class="btn secondary" href="{{ url_for('responsables') }}">Responsables</a>
     <a class="btn secondary" href="{{ url_for('exportar_csv') }}">Exportar CSV</a>
   </div>
 </section>
-
-
 
 <section class="urgent-panel" id="dashboard-urgente" aria-label="Dashboard de acciones urgentes">
   <div class="urgent-head">
     <div>
       <h2>Dashboard de acciones urgentes</h2>
-      <p>Rango máximo: desde hoy hasta los próximos {{ urgent_dashboard.window_days }} días. También se incluyen tareas vencidas no finalizadas.</p>
+      <p>Rango máximo: desde hoy hasta los próximos {{ urgent_dashboard.window_days }} días. También se incluyen acciones vencidas no finalizadas.</p>
     </div>
     <div class="urgent-range">
       <span>{{ urgent_dashboard.today }}</span>
@@ -43,7 +42,7 @@
       </div>
       <div class="urgent-main">
         <h3>{{ task.title }}</h3>
-        <p>{{ task.area or 'Sin área' }} · {{ task.assignee or 'Sin responsable' }}</p>
+        <p>{{ task.area or 'Sin área' }} · {{ task.responsible_names or 'Sin responsable' }}</p>
       </div>
       <div class="urgent-tags">
         <span class="tag priority-tag">{{ task.priority }}</span>
@@ -59,7 +58,7 @@
 </section>
 
 <section class="metrics-grid">
-  <article class="metric-card"><span>Total tareas</span><strong>{{ metrics.total }}</strong></article>
+  <article class="metric-card"><span>Total acciones</span><strong>{{ metrics.total }}</strong></article>
   <article class="metric-card"><span>Finalizadas</span><strong>{{ metrics.finalizados }}</strong></article>
   <article class="metric-card"><span>Bloqueadas</span><strong>{{ metrics.bloqueados }}</strong></article>
   <article class="metric-card"><span>Vencidas</span><strong>{{ metrics.vencidos }}</strong></article>
@@ -68,7 +67,7 @@
 
 <section class="filter-card">
   <form method="get" action="{{ url_for('index') }}">
-    <input type="search" name="q" placeholder="Buscar tarea, descripción, responsable o área" value="{{ filters.q }}">
+    <input type="search" name="q" placeholder="Buscar acción, descripción, responsable o área" value="{{ filters.q }}">
     <select name="area">
       <option value="">Todas las áreas</option>
       {% for area in AREAS %}<option value="{{ area }}" {% if filters.area == area %}selected{% endif %}>{{ area }}</option>{% endfor %}
@@ -100,14 +99,15 @@
         <h3>{{ task.title }}</h3>
         {% if task.description %}<p>{{ task.description }}</p>{% endif %}
         <dl>
-          {% if task.assignee %}<div><dt>Responsable</dt><dd>{{ task.assignee }}</dd></div>{% endif %}
-          {% if task.assignee_email %}<div><dt>Correo</dt><dd>{{ task.assignee_email }}</dd></div>{% endif %}
+          {% if task.responsible_names %}<div><dt>Responsables</dt><dd>{{ task.responsible_names }}</dd></div>{% endif %}
+          {% if task.responsible_emails %}<div><dt>Correos</dt><dd>{{ task.responsible_emails }}</dd></div>{% endif %}
+          {% if task.responsible_whatsapps %}<div><dt>WhatsApp</dt><dd>{{ task.responsible_whatsapps }}</dd></div>{% endif %}
           {% if task.area %}<div><dt>Área</dt><dd>{{ task.area }}</dd></div>{% endif %}
           {% if task.due_date %}<div><dt>Fecha límite</dt><dd>{{ task.due_date }}</dd></div>{% endif %}
         </dl>
         <div class="task-actions">
           <a class="ghost action-link" href="{{ url_for('editar', task_id=task.id) }}">Editar</a>
-          <form method="post" action="{{ url_for('eliminar', task_id=task.id) }}" onsubmit="return confirm('¿Eliminar esta tarea?');">
+          <form method="post" action="{{ url_for('eliminar', task_id=task.id) }}" onsubmit="return confirm('¿Eliminar esta acción?');">
             <button type="submit" class="ghost danger-text">Eliminar</button>
           </form>
         </div>
@@ -119,13 +119,13 @@
 </section>
 
 <div class="modal" id="createModal" aria-hidden="true">
-  <div class="modal-panel">
+  <div class="modal-panel modal-wide">
     <button type="button" class="modal-close" data-close-modal>&times;</button>
-    <h2>Nueva tarea</h2>
-    {% set task = {'title':'','description':'','status':'pendiente','priority':'Media','assignee':'','assignee_email':'','area':'','due_date':''} %}
+    <h2>Nueva acción</h2>
+    {% set task = {'title':'','description':'','status':'pendiente','priority':'Media','area':'','due_date':'','responsible_ids':[]} %}
     <form method="post" action="{{ url_for('crear') }}" class="task-form">
       {% include "task_form_fields.html" %}
-      <button type="submit">Crear tarea</button>
+      <button type="submit">Crear acción</button>
     </form>
   </div>
 </div>

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero edit-hero">
+  <div>
+    <h1>Editar responsable</h1>
+    <p>Actualiza correo, teléfono y preferencias de notificación.</p>
+  </div>
+  <div class="hero-actions">
+    <a class="btn secondary" href="{{ url_for('responsables') }}">Volver a responsables</a>
+  </div>
+</section>
+<section class="edit-card">
+  <form method="post" action="{{ url_for('editar_responsable', responsible_id=responsible.id) }}" class="task-form">
+    {% include "responsable_form_fields.html" %}
+    <div class="form-actions">
+      <button type="submit">Guardar responsable</button>
+      <a class="btn secondary" href="{{ url_for('responsables') }}">Cancelar</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

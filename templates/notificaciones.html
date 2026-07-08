@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div>
+    <h1>Historial de notificaciones</h1>
+    <p>Últimos 100 intentos de envío por correo y WhatsApp.</p>
+  </div>
+  <div class="hero-actions">
+    <a class="btn secondary" href="{{ url_for('index') }}">Volver al tablero</a>
+  </div>
+</section>
+<section class="table-card">
+  {% if logs %}
+  <div class="responsive-table">
+    <table>
+      <thead>
+        <tr><th>Fecha</th><th>Canal</th><th>Evento</th><th>Destinatario</th><th>Resultado</th><th>Detalle</th></tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td>{{ log.created_at }}</td>
+          <td>{{ log.channel }}</td>
+          <td>{{ log.event_type }}</td>
+          <td>{{ log.recipient }}</td>
+          <td><span class="tag {% if log.result == 'enviado' %}ok-tag{% else %}danger-tag{% endif %}">{{ log.result }}</span></td>
+          <td class="detail-cell">{{ log.detail }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="urgent-empty">Aún no hay registros de notificaciones.</div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -2,20 +2,13 @@
 {% block content %}
 <section class="hero edit-hero">
   <div>
-    <h1>EDITAR TAREA</h1>
-    <p>Actualiza responsable, correo, prioridad, estado y fecha límite.</p>
+    <h1>Editar acción</h1>
+    <p>Actualiza responsables, prioridad, estado, área y fecha límite.</p>
   </div>
   <div class="hero-actions">
     <a class="btn secondary" href="{{ url_for('index') }}">Volver al tablero</a>
   </div>
 </section>
-
-{% if not EMAIL_ENABLED %}
-<section class="mail-warning">
-  <strong>Correos no configurados.</strong> Los cambios se guardarán, pero no se enviarán notificaciones hasta configurar Brevo o SMTP en Render.
-</section>
-{% endif %}
-
 <section class="edit-card">
   <form method="post" action="{{ url_for('editar', task_id=task.id) }}" class="task-form">
     {% include "task_form_fields.html" %}

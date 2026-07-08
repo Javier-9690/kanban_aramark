@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div>
+    <h1>Responsables</h1>
+    <p>Administra usuarios responsables, correo y WhatsApp para notificaciones automáticas.</p>
+  </div>
+  <div class="hero-actions">
+    <a class="btn secondary" href="{{ url_for('index') }}">Volver al tablero</a>
+  </div>
+</section>
+
+<section class="edit-card">
+  <h2>Agregar responsable</h2>
+  <form method="post" action="{{ url_for('responsables') }}" class="task-form">
+    {% set responsible = {'name':'','email':'','whatsapp_phone':'','area':'','notify_email':true,'notify_whatsapp':false,'active':true} %}
+    {% include "responsable_form_fields.html" %}
+    <button type="submit">Crear responsable</button>
+  </form>
+</section>
+
+<section class="table-card">
+  <h2>Responsables registrados</h2>
+  {% if responsibles %}
+  <div class="responsive-table">
+    <table>
+      <thead>
+        <tr>
+          <th>Nombre</th>
+          <th>Área</th>
+          <th>Correo</th>
+          <th>WhatsApp</th>
+          <th>Notifica</th>
+          <th>Estado</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in responsibles %}
+        <tr>
+          <td><strong>{{ r.name }}</strong></td>
+          <td>{{ r.area or 'Sin área' }}</td>
+          <td>{{ r.email or 'Sin correo' }}</td>
+          <td>{{ r.whatsapp_phone or 'Sin WhatsApp' }}</td>
+          <td>
+            {% if r.notify_email %}<span class="tag status-tag">Email</span>{% endif %}
+            {% if r.notify_whatsapp %}<span class="tag priority-tag">WhatsApp</span>{% endif %}
+          </td>
+          <td>{% if r.active %}<span class="tag ok-tag">Activo</span>{% else %}<span class="tag muted-tag">Inactivo</span>{% endif %}</td>
+          <td class="row-actions">
+            <a class="ghost action-link" href="{{ url_for('editar_responsable', responsible_id=r.id) }}">Editar</a>
+            <form method="post" action="{{ url_for('eliminar_responsable', responsible_id=r.id) }}" onsubmit="return confirm('¿Eliminar responsable? Se quitará de las acciones asignadas.');">
+              <button type="submit" class="ghost danger-text">Eliminar</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="urgent-empty">Aún no hay responsables. Crea el primero para asignarlo a las acciones.</div>
+  {% endif %}
+</section>
+{% endblock %}

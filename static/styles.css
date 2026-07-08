@@ -557,3 +557,104 @@ button, .btn {
   .topbar .brand-right img { height: 28px; }
   .app-title { order: 0; }
 }
+
+/* Responsables y WhatsApp */
+.multi-select {
+  min-height: 170px;
+  padding: 10px;
+}
+.task-form small {
+  color: #6b7280;
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+}
+.switch-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0 14px;
+}
+.check-row {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e1e1e1;
+  background: #fafafa;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 700;
+  color: #303030;
+}
+.check-row input {
+  width: auto !important;
+}
+.table-card {
+  background: #fff;
+  border: 1px solid #d7d7d7;
+  border-top: 5px solid #ed1b2e;
+  border-radius: 10px;
+  padding: 18px;
+  margin: 18px 0;
+  box-shadow: 0 8px 22px rgba(0,0,0,.05);
+}
+.table-card h2 {
+  margin-top: 0;
+}
+.responsive-table {
+  width: 100%;
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+th, td {
+  text-align: left;
+  border-bottom: 1px solid #eee;
+  padding: 10px 8px;
+  vertical-align: top;
+}
+th {
+  color: #0e1726;
+  background: #fafafa;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.row-actions form {
+  margin: 0;
+}
+.ok-tag {
+  background: #e8f6ed;
+  color: #126b30;
+}
+.muted-tag {
+  background: #f1f1f1;
+  color: #555;
+}
+.danger-tag {
+  background: #fff0f1;
+  color: #b10016;
+}
+.detail-cell {
+  max-width: 520px;
+  word-break: break-word;
+  white-space: normal;
+}
+.modal-wide {
+  max-width: 820px;
+}
+.task-card dl dd {
+  word-break: break-word;
+}
+@media (max-width: 720px) {
+  .switch-grid { flex-direction: column; }
+  .row-actions { flex-direction: column; align-items: flex-start; }
+}

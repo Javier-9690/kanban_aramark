@@ -1,8 +1,8 @@
-<label>Título
-  <input type="text" name="title" value="{{ task.title }}" required maxlength="120">
+<label>Título de la acción
+  <input type="text" name="title" value="{{ task.title }}" required maxlength="120" placeholder="Ej: Revisar cierre de módulo 15F">
 </label>
 <label>Descripción
-  <textarea name="description" rows="4">{{ task.description }}</textarea>
+  <textarea name="description" rows="4" placeholder="Detalle operativo de la acción">{{ task.description }}</textarea>
 </label>
 <div class="form-grid">
   <label>Estado
@@ -16,14 +16,16 @@
     </select>
   </label>
 </div>
-<div class="form-grid">
-  <label>Responsable
-    <input type="text" name="assignee" value="{{ task.assignee }}" maxlength="80" placeholder="Nombre del responsable">
-  </label>
-  <label>Correo responsable
-    <input type="email" name="assignee_email" value="{{ task.assignee_email }}" maxlength="120" placeholder="responsable@empresa.com">
-  </label>
-</div>
+<label>Responsables asignados
+  <select name="responsible_ids" multiple size="7" class="multi-select">
+    {% for responsible in responsibles %}
+      <option value="{{ responsible.id }}" {% if task.responsible_ids and (responsible.id|string) in task.responsible_ids %}selected{% endif %}>
+        {{ responsible.name }}{% if responsible.area %} · {{ responsible.area }}{% endif %}{% if responsible.email %} · email{% endif %}{% if responsible.whatsapp_phone %} · WhatsApp{% endif %}
+      </option>
+    {% endfor %}
+  </select>
+  <small>Para seleccionar varios responsables: mantén Ctrl presionado y haz clic en cada nombre.</small>
+</label>
 <div class="form-grid">
   <label>Área
     <select name="area">
@@ -31,7 +33,7 @@
       {% for area in AREAS %}<option value="{{ area }}" {% if task.area == area %}selected{% endif %}>{{ area }}</option>{% endfor %}
     </select>
   </label>
+  <label>Fecha límite
+    <input type="date" name="due_date" value="{{ task.due_date }}">
+  </label>
 </div>
-<label>Fecha límite
-  <input type="date" name="due_date" value="{{ task.due_date }}">
-</label>
