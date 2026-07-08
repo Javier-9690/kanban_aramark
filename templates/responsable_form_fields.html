@@ -13,13 +13,8 @@
   <label>Correo
     <input type="email" name="email" value="{{ responsible.email }}" maxlength="160" placeholder="usuario@empresa.com">
   </label>
-  <label>Teléfono WhatsApp
-    <input type="text" name="whatsapp_phone" value="{{ responsible.whatsapp_phone }}" maxlength="30" placeholder="+56912345678">
-    <small>Usa formato internacional. Para Chile: +569XXXXXXXX.</small>
-  </label>
 </div>
 <div class="switch-grid">
   <label class="check-row"><input type="checkbox" name="notify_email" {% if responsible.notify_email %}checked{% endif %}> Notificar por correo</label>
-  <label class="check-row"><input type="checkbox" name="notify_whatsapp" {% if responsible.notify_whatsapp %}checked{% endif %}> Notificar por WhatsApp</label>
   <label class="check-row"><input type="checkbox" name="active" {% if responsible.active %}checked{% endif %}> Responsable activo</label>
 </div>

@@ -183,18 +183,14 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 email TEXT,
-                whatsapp_phone TEXT,
                 area TEXT,
                 notify_email BOOLEAN NOT NULL DEFAULT TRUE,
-                notify_whatsapp BOOLEAN NOT NULL DEFAULT FALSE,
                 active BOOLEAN NOT NULL DEFAULT TRUE,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """,
-            "ALTER TABLE responsables ADD COLUMN IF NOT EXISTS whatsapp_phone TEXT",
             "ALTER TABLE responsables ADD COLUMN IF NOT EXISTS notify_email BOOLEAN NOT NULL DEFAULT TRUE",
-            "ALTER TABLE responsables ADD COLUMN IF NOT EXISTS notify_whatsapp BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE responsables ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE",
             """
             CREATE TABLE IF NOT EXISTS task_responsibles (
@@ -247,10 +243,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             email TEXT,
-            whatsapp_phone TEXT,
             area TEXT,
             notify_email INTEGER NOT NULL DEFAULT 1,
-            notify_whatsapp INTEGER NOT NULL DEFAULT 0,
             active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -284,9 +278,7 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_notify_logs_task ON notification_logs(task_id)",
     ])
     sqlite_add_column_if_missing("tasks", "assignee_email", "TEXT")
-    sqlite_add_column_if_missing("responsables", "whatsapp_phone", "TEXT")
     sqlite_add_column_if_missing("responsables", "notify_email", "INTEGER NOT NULL DEFAULT 1")
-    sqlite_add_column_if_missing("responsables", "notify_whatsapp", "INTEGER NOT NULL DEFAULT 0")
     sqlite_add_column_if_missing("responsables", "active", "INTEGER NOT NULL DEFAULT 1")
 
 
@@ -319,16 +311,13 @@ def notifications_active():
     return env_bool("NOTIFY_EMAIL", default=True)
 
 
-def whatsapp_notifications_active():
-    return env_bool("NOTIFY_WHATSAPP", default=False)
-
 
 def app_base_url():
     return env_text("APP_BASE_URL").rstrip("/")
 
 
 def brevo_sender_email():
-    return env_text("BREVO_FROM_EMAIL") or env_text("SMTP_FROM") or env_text("EMAIL_FROM")
+    return env_text("BREVO_FROM_EMAIL") or env_text("EMAIL_FROM")
 
 
 def brevo_enabled():
@@ -339,21 +328,6 @@ def email_enabled():
     return notifications_active() and brevo_enabled()
 
 
-def whatsapp_enabled():
-    return whatsapp_notifications_active() and bool(env_text("BREVO_API_KEY") and env_text("BREVO_WHATSAPP_TEMPLATE_ID"))
-
-
-def normalize_phone(value):
-    raw = (value or "").strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-    if not raw:
-        return ""
-    if raw.startswith("+"):
-        return raw
-    if raw.startswith("56") and len(raw) >= 11:
-        return "+" + raw
-    if raw.startswith("9") and len(raw) == 9:
-        return "+56" + raw
-    return raw
 
 
 def parse_due_date(value):
@@ -382,7 +356,6 @@ def active_responsibles():
     rows = query_all("SELECT * FROM responsables WHERE active = ? ORDER BY name", (bool_to_db(True),))
     for r in rows:
         r["notify_email"] = db_bool(r.get("notify_email"))
-        r["notify_whatsapp"] = db_bool(r.get("notify_whatsapp"))
         r["active"] = db_bool(r.get("active"))
     return rows
 
@@ -391,7 +364,6 @@ def all_responsibles():
     rows = query_all("SELECT * FROM responsables ORDER BY active DESC, name")
     for r in rows:
         r["notify_email"] = db_bool(r.get("notify_email"))
-        r["notify_whatsapp"] = db_bool(r.get("notify_whatsapp"))
         r["active"] = db_bool(r.get("active"))
     return rows
 
@@ -400,7 +372,6 @@ def get_responsible(responsible_id):
     row = query_one("SELECT * FROM responsables WHERE id = ?", (responsible_id,))
     if row:
         row["notify_email"] = db_bool(row.get("notify_email"))
-        row["notify_whatsapp"] = db_bool(row.get("notify_whatsapp"))
         row["active"] = db_bool(row.get("active"))
     return row
 
@@ -417,7 +388,6 @@ def get_task_responsibles(task_id):
     )
     for r in rows:
         r["notify_email"] = db_bool(r.get("notify_email"))
-        r["notify_whatsapp"] = db_bool(r.get("notify_whatsapp"))
         r["active"] = db_bool(r.get("active"))
     return rows
 
@@ -462,7 +432,6 @@ def row_to_dict(row):
     item["responsible_ids"] = [str(r["id"]) for r in responsibles]
     item["responsible_names"] = ", ".join([r.get("name") or "" for r in responsibles if r.get("name")]) or item.get("assignee") or ""
     item["responsible_emails"] = ", ".join([r.get("email") or "" for r in responsibles if r.get("email")]) or item.get("assignee_email") or ""
-    item["responsible_whatsapps"] = ", ".join([r.get("whatsapp_phone") or "" for r in responsibles if r.get("whatsapp_phone")])
     return item
 
 
@@ -681,90 +650,6 @@ def send_brevo_email_sync(recipient, recipient_name, subject, text_content, html
         return False, str(exc)
 
 
-def whatsapp_params(task, event_label, changes=None):
-    url = task_url(task)
-    changes_text = "; ".join(changes or [])[:450] if changes else "Sin cambios adicionales"
-    return {
-        "evento": event_label,
-        "tarea": task.get("title") or "Sin título",
-        "estado": STATUS_LABELS.get(task.get("status"), task.get("status") or ""),
-        "prioridad": task.get("priority") or "Media",
-        "area": task.get("area") or "Sin área",
-        "fecha_limite": task.get("due_date") or "Sin fecha",
-        "url": url or app_base_url() or "",
-        "cambios": changes_text,
-    }
-
-
-def build_brevo_whatsapp_payload(phone, task, event_label, changes=None):
-    template_id_raw = env_text("BREVO_WHATSAPP_TEMPLATE_ID")
-    if not template_id_raw:
-        raise RuntimeError("Falta BREVO_WHATSAPP_TEMPLATE_ID")
-    try:
-        template_id = int(template_id_raw)
-    except ValueError:
-        template_id = template_id_raw
-
-    params = whatsapp_params(task, event_label, changes)
-    # Brevo admite plantillas aprobadas. La API usa /v3/whatsapp/sendMessage.
-    # El cuerpo puede variar según la plantilla/SDK; esta estructura usa un modo directo habitual:
-    payload = {
-        "contactNumber": normalize_phone(phone),
-        "templateId": template_id,
-        "params": params,
-    }
-    sender_number = normalize_phone(env_text("BREVO_WHATSAPP_SENDER_NUMBER"))
-    if sender_number:
-        payload["senderNumber"] = sender_number
-    lang = env_text("BREVO_WHATSAPP_LANGUAGE")
-    if lang:
-        payload["language"] = lang
-    return payload
-
-
-def send_brevo_whatsapp_sync(phone, responsible_name, task, event_label, changes=None, responsible_id=None, event_type="task"):
-    api_key = env_text("BREVO_API_KEY")
-    timeout = float(env_text("BREVO_WHATSAPP_TIMEOUT", "8"))
-    phone = normalize_phone(phone)
-    if not api_key:
-        log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "error", "Falta BREVO_API_KEY")
-        return False, "Falta BREVO_API_KEY."
-    if not phone:
-        log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "error", "Teléfono vacío")
-        return False, "Teléfono vacío."
-
-    try:
-        payload = build_brevo_whatsapp_payload(phone, task, event_label, changes)
-    except Exception as exc:
-        log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "error", str(exc))
-        return False, str(exc)
-
-    endpoint = env_text("BREVO_WHATSAPP_ENDPOINT", "https://api.brevo.com/v3/whatsapp/sendMessage")
-    req = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"accept": "application/json", "api-key": api_key, "content-type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            body = response.read().decode("utf-8", "ignore")
-            if not (200 <= response.status < 300):
-                raise RuntimeError(f"Brevo WhatsApp respondió HTTP {response.status}: {body}")
-            log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "enviado", body[:500])
-            app.logger.info("WhatsApp enviado por Brevo a %s", phone)
-            return True, "WhatsApp enviado por Brevo."
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", "ignore")
-        log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "error", f"HTTP {exc.code}: {body[:800]}")
-        app.logger.exception("Brevo rechazó WhatsApp a %s. HTTP %s: %s", phone, exc.code, body)
-        return False, f"Brevo WhatsApp HTTP {exc.code}: {body[:500]}"
-    except Exception as exc:
-        log_notification("whatsapp", event_type, task.get("id"), responsible_id, phone, "error", str(exc))
-        app.logger.exception("No se pudo enviar WhatsApp por Brevo a %s: %s", phone, exc)
-        return False, str(exc)
-
-
 def notify_task(task, subject, intro, changes=None, event_type="task", event_label="Actualización de acción"):
     if not task:
         return
@@ -788,16 +673,6 @@ def notify_task(task, subject, intro, changes=None, event_type="task", event_lab
                         responsible_id=rid,
                         event_type=event_type,
                     )
-                if whatsapp_enabled() and db_bool(responsible.get("notify_whatsapp")) and responsible.get("whatsapp_phone"):
-                    send_brevo_whatsapp_sync(
-                        responsible.get("whatsapp_phone"),
-                        responsible.get("name"),
-                        task_copy,
-                        event_label,
-                        changes_copy,
-                        responsible_id=rid,
-                        event_type=event_type,
-                    )
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -809,10 +684,8 @@ def responsible_record_from_form(form):
     return {
         "name": name,
         "email": (form.get("email") or "").strip(),
-        "whatsapp_phone": normalize_phone(form.get("whatsapp_phone") or ""),
         "area": (form.get("area") or "").strip(),
         "notify_email": bool_to_db(form.get("notify_email") == "on"),
-        "notify_whatsapp": bool_to_db(form.get("notify_whatsapp") == "on"),
         "active": bool_to_db(form.get("active") == "on"),
     }
 
@@ -930,7 +803,6 @@ def inject_globals():
         "AREAS": AREAS,
         "STATUS_LABELS": STATUS_LABELS,
         "EMAIL_ENABLED": email_enabled(),
-        "WHATSAPP_ENABLED": whatsapp_enabled(),
     }
 
 
@@ -1038,14 +910,14 @@ def responsables():
             record = responsible_record_from_form(request.form)
             row = execute_returning(
                 """
-                INSERT INTO responsables (name, email, whatsapp_phone, area, notify_email, notify_whatsapp, active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO responsables (name, email, area, notify_email, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 RETURNING id
                 """ if is_postgres() else """
-                INSERT INTO responsables (name, email, whatsapp_phone, area, notify_email, notify_whatsapp, active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO responsables (name, email, area, notify_email, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (record["name"], record["email"], record["whatsapp_phone"], record["area"], record["notify_email"], record["notify_whatsapp"], record["active"], now_text(), now_text()),
+                (record["name"], record["email"], record["area"], record["notify_email"], record["active"], now_text(), now_text()),
             )
             flash("Responsable creado correctamente.", "success")
         except Exception as exc:
@@ -1067,10 +939,10 @@ def editar_responsable(responsible_id):
             execute_write(
                 """
                 UPDATE responsables
-                SET name = ?, email = ?, whatsapp_phone = ?, area = ?, notify_email = ?, notify_whatsapp = ?, active = ?, updated_at = ?
+                SET name = ?, email = ?, area = ?, notify_email = ?, active = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (record["name"], record["email"], record["whatsapp_phone"], record["area"], record["notify_email"], record["notify_whatsapp"], record["active"], now_text(), responsible_id),
+                (record["name"], record["email"], record["area"], record["notify_email"], record["active"], now_text(), responsible_id),
             )
             for link in query_all("SELECT task_id FROM task_responsibles WHERE responsible_id = ?", (responsible_id,)):
                 refresh_task_legacy_fields(link["task_id"])
@@ -1103,7 +975,7 @@ def notificaciones():
 def exportar_csv():
     tasks = load_tasks()
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["id", "title", "description", "status", "priority", "responsables", "correos", "whatsapp", "area", "due_date", "created_at", "updated_at"])
+    writer = csv.DictWriter(output, fieldnames=["id", "title", "description", "status", "priority", "responsables", "correos", "area", "due_date", "created_at", "updated_at"])
     writer.writeheader()
     for task in tasks:
         writer.writerow({
@@ -1114,7 +986,6 @@ def exportar_csv():
             "priority": task.get("priority", ""),
             "responsables": task.get("responsible_names", ""),
             "correos": task.get("responsible_emails", ""),
-            "whatsapp": task.get("responsible_whatsapps", ""),
             "area": task.get("area", ""),
             "due_date": task.get("due_date", ""),
             "created_at": task.get("created_at", ""),
@@ -1131,7 +1002,6 @@ def health():
         "app": APP_TITLE,
         "database": "postgresql" if is_postgres() else "sqlite",
         "email": email_enabled(),
-        "whatsapp": whatsapp_enabled(),
     }
 
 

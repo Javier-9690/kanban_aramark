@@ -3,7 +3,7 @@
 <section class="hero">
   <div>
     <h1>Tablero Kanban Operacional</h1>
-    <p>Gestión de acciones, múltiples responsables y notificaciones por correo y WhatsApp.</p>
+    <p>Gestión de acciones, múltiples responsables y notificaciones por correo.</p>
   </div>
   <div class="hero-actions">
     <button type="button" class="btn" data-open-modal="createModal">+ Nueva acción</button>
@@ -101,7 +101,6 @@
         <dl>
           {% if task.responsible_names %}<div><dt>Responsables</dt><dd>{{ task.responsible_names }}</dd></div>{% endif %}
           {% if task.responsible_emails %}<div><dt>Correos</dt><dd>{{ task.responsible_emails }}</dd></div>{% endif %}
-          {% if task.responsible_whatsapps %}<div><dt>WhatsApp</dt><dd>{{ task.responsible_whatsapps }}</dd></div>{% endif %}
           {% if task.area %}<div><dt>Área</dt><dd>{{ task.area }}</dd></div>{% endif %}
           {% if task.due_date %}<div><dt>Fecha límite</dt><dd>{{ task.due_date }}</dd></div>{% endif %}
         </dl>

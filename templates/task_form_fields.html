@@ -20,7 +20,7 @@
   <select name="responsible_ids" multiple size="7" class="multi-select">
     {% for responsible in responsibles %}
       <option value="{{ responsible.id }}" {% if task.responsible_ids and (responsible.id|string) in task.responsible_ids %}selected{% endif %}>
-        {{ responsible.name }}{% if responsible.area %} · {{ responsible.area }}{% endif %}{% if responsible.email %} · email{% endif %}{% if responsible.whatsapp_phone %} · WhatsApp{% endif %}
+        {{ responsible.name }}{% if responsible.area %} · {{ responsible.area }}{% endif %}{% if responsible.email %} · email{% endif %}
       </option>
     {% endfor %}
   </select>
